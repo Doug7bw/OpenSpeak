@@ -7,6 +7,7 @@
 #include <QtGui/qpa/qplatformwindow_p.h>
 
 #include <windows.h>
+#include <shellapi.h>
 
 NativeWindow::~NativeWindow()
 {
@@ -35,6 +36,14 @@ void NativeWindow::enableSnapToTop(QWindow *window)
     installFilter();
 }
 
+void NativeWindow::keepAutoHideTaskbar(QWindow *window)
+{
+    if (!window || m_taskbarWindows.contains(window))
+        return;
+    m_taskbarWindows.append(window);
+    installFilter();
+}
+
 void NativeWindow::installFilter()
 {
     if (!m_filterInstalled) {
@@ -60,6 +69,45 @@ static void paintBlackFrame(HWND hwnd)
     }
 }
 
+// Borda do monitor com uma barra de tarefas oculta automaticamente, ou -1.
+static int autoHideTaskbarEdge(const RECT &monitor)
+{
+    for (UINT edge : {ABE_BOTTOM, ABE_TOP, ABE_LEFT, ABE_RIGHT}) {
+        APPBARDATA data{sizeof(APPBARDATA)};
+        data.uEdge = edge;
+        data.rc = monitor;
+        if (SHAppBarMessage(ABM_GETAUTOHIDEBAREX, &data))
+            return int(edge);
+    }
+    return -1;
+}
+
+// Maximiza deixando 1 px livre na borda da barra. Devolve false (o Qt cuida) quando a
+// área de trabalho já é menor que o monitor, ou seja, quando a barra não se oculta.
+static bool leaveTaskbarEdgeFree(QWindow *window, HWND hwnd, MINMAXINFO *limits)
+{
+    MONITORINFO info{sizeof(MONITORINFO)};
+    if (!GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &info)
+        || !EqualRect(&info.rcWork, &info.rcMonitor))
+        return false;
+    const int edge = autoHideTaskbarEdge(info.rcMonitor);
+    if (edge < 0)
+        return false;
+    RECT area{0, 0, info.rcMonitor.right - info.rcMonitor.left, info.rcMonitor.bottom - info.rcMonitor.top};
+    switch (edge) {
+    case ABE_BOTTOM: --area.bottom; break;
+    case ABE_TOP: ++area.top; break;
+    case ABE_LEFT: ++area.left; break;
+    case ABE_RIGHT: --area.right; break;
+    }
+    limits->ptMaxPosition = {area.left, area.top};
+    limits->ptMaxSize = {area.right - area.left, area.bottom - area.top};
+    // Tratar a mensagem aqui pula o Qt, que aplicaria o tamanho mínimo da janela.
+    const QSize minimum = window->minimumSize() * window->devicePixelRatio();
+    limits->ptMinTrackSize = {minimum.width(), minimum.height()};
+    return true;
+}
+
 void NativeWindow::setLinkColor(const QColor &color)
 {
     QPalette palette = QGuiApplication::palette();
@@ -81,6 +129,15 @@ bool NativeWindow::nativeEventFilter(const QByteArray &eventType, void *message,
                 continue;
             paintBlackFrame(msg->hwnd);
             *result = msg->message == WM_NCACTIVATE ? TRUE : 0;
+            return true;
+        }
+        break;
+    case WM_GETMINMAXINFO:
+        for (const QPointer<QWindow> &window : std::as_const(m_taskbarWindows)) {
+            if (!window || HWND(window->winId()) != msg->hwnd
+                || !leaveTaskbarEdgeFree(window, msg->hwnd, reinterpret_cast<MINMAXINFO *>(msg->lParam)))
+                continue;
+            *result = 0;
             return true;
         }
         break;

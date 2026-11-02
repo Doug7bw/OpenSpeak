@@ -25,6 +25,11 @@ public:
     /// com o cursor no topo do monitor, maximiza como as janelas do Windows.
     Q_INVOKABLE void enableSnapToTop(QWindow *window);
 
+    /// Maximizada, a janela sem moldura cobre o monitor inteiro quando a barra de tarefas
+    /// se oculta sozinha, e o Windows a trata como "app em tela cheia": a barra não volta
+    /// ao levar o mouse à borda. Deixar 1 px livre nessa borda evita isso.
+    Q_INVOKABLE void keepAutoHideTaskbar(QWindow *window);
+
     /// Cor dos links em Markdown/RichText: o QTextDocument usa a paleta da
     /// aplicação e ignora `linkColor`/`palette` do Label.
     Q_INVOKABLE void setLinkColor(const QColor &color);
@@ -34,6 +39,7 @@ public:
 private:
     void installFilter();
     QList<QPointer<QWindow>> m_snapWindows;
+    QList<QPointer<QWindow>> m_taskbarWindows;
     QList<QPointer<QWindow>> m_borderWindows; // tela cheia com a borda de 1 px pintada de preto
     bool m_filterInstalled = false;
     bool m_sizing = false; // o laço modal atual é de redimensionar, não de mover

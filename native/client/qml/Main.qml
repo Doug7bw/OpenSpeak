@@ -206,6 +206,7 @@ ApplicationWindow {
     }
     Component.onCompleted: {
         NativeWindow.enableSnapToTop(window)
+        NativeWindow.keepAutoHideTaskbar(window)
         NativeWindow.setLinkColor(Theme.accent)
         if (DebugOpen === "updates") Qt.callLater(() => preferencesDialog.openAt("updates"))
         if (DebugOpen === "preferences") Qt.callLater(() => preferencesDialog.open())
