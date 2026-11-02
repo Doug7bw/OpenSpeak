@@ -6,7 +6,7 @@ OpenSpeak is a P2P video streaming app (screen/window/camera with audio) modeled
 
 ## Two implementations, one protocol
 
-1. **Web client + Node server** (repo root): `server/` (signaling, `virtualServer.js`), `public/js/` (browser WebRTC client), `api/` + `vercel.json` (Vercel deployment: `/ws` → `api/ws.js`, with `server/cloudRoom.js` + `redisRoomStore.js` for room state).
+1. **Web client + Node server** (repo root): `server/` (signaling, `virtualServer.js`), `public/js/` (browser WebRTC client; phones and tablets get the watch-only `ui/MobileApp.js`, `?mobile=1` forces it), `api/` + `vercel.json` (Vercel deployment: `/ws` → `api/ws.js`, with `server/cloudRoom.js` + `redisRoomStore.js` for room state).
 2. **Native Windows app** (`native/`, C++ / Qt 6 QML / libdatachannel / FFmpeg+NVENC): client `OpenSpeak.exe` (`native/client/`) and server `openspeak-server.exe` (`native/server/`). Shared wire protocol in `native/common/Protocol.h`.
 
 Native and browser clients speak the **same protocol** and can watch each other — a protocol change must be mirrored in `server/protocol.js`/`server/virtualServer.js` and `native/common/Protocol.h`/`native/server/VirtualServer.cpp`.

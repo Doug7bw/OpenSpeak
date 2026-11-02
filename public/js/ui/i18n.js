@@ -130,6 +130,10 @@ const STRINGS = {
   'video.join.status.connecting': 'Conectando...',
   'video.join.status.reconnecting': 'Reconectando...',
   'video.join.status.waiting_for_answer': 'Aguardando autorização...',
+  'video.mobile.empty.hint': 'Quando alguém começar a transmitir, o stream aparece aqui.',
+  'video.mobile.live_now': 'Ao vivo agora',
+  'video.mobile.unmute': 'Tocar para ouvir',
+  'video.mobile.watch_only': 'No celular dá para assistir. Para transmitir, use o computador.',
   'video.join_requests.tooltip': 'Usuários aguardando para entrar',
 
   'video.layout.auto': 'Organizar automaticamente',

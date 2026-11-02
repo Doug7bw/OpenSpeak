@@ -8,6 +8,8 @@ import { ConnectionHandler } from './core/ConnectionHandler.js';
 import { ScreenshareManager } from './video/ScreenshareManager.js';
 import { StreamArea } from './ui/StreamArea.js';
 import { ChannelTree } from './ui/ChannelTree.js';
+import { MobileApp } from './ui/MobileApp.js';
+import { isMobileClient } from './ui/mobile.js';
 import { SetupStreamDialog } from './ui/SetupStreamDialog.js';
 import { ViewersPanel } from './ui/ViewersPanel.js';
 import { StatsPanel } from './ui/StatsPanel.js';
@@ -21,6 +23,8 @@ const deployment = window.OpenSpeakConfig || {};
 deployment.tailscaleOnly ||= location.hostname.endsWith('.ts.net');
 window.OpenSpeakConfig = deployment;
 const entryParams = new URLSearchParams(location.search);
+const mobile = isMobileClient(navigator, location.search);
+document.body.classList.toggle('mobile', mobile);
 const INSTALLER_URL = 'https://github.com/JonasHenriqueDev/OpenSpeak/releases/latest/download/OpenSpeak-Setup.exe';
 function installerLink(compact = false) {
   return h('a.desktop-download', { href: INSTALLER_URL, title: 'Baixar o instalador Windows da última versão estável',
@@ -160,7 +164,7 @@ function renderLogin(message = '') {
   submit,
   deployment.cloudSignaling ? null : changeServer,
   status,
-  installerLink(),
+  mobile ? null : installerLink(),
   repoLink());
   replaceChildren(root, h('div.login', form));
   nick.focus();
@@ -178,8 +182,12 @@ async function startSession(url, nickname) {
   serverAddress = url;
   if (deployment.tailscaleOnly) handler.iceServers = [];
   const manager = new ScreenshareManager(handler, { contacts, settings });
-  new SoundEffects(handler, settings, manager);
   window.addEventListener('pagehide', () => handler.disconnect(), { once: true });
+  if (mobile) {
+    new MobileApp({ root, handler, manager, onError: showError, onDisconnected: () => renderLogin(t('app.disconnected')) }).mount();
+    return;
+  }
+  new SoundEffects(handler, settings, manager);
   new App(handler, manager).mount();
 }
 

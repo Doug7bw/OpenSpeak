@@ -515,3 +515,56 @@ select.input { padding-right: 4px; }
 @media (max-width: 600px) {
   .sidebar { display: none; }
 }
+
+/* ------------------------------------------------------- versão mobile */
+
+body.mobile .input { font-size: 16px; } /* menor que isso o iOS dá zoom ao focar */
+body.mobile .login { overflow-y: auto; }
+.mobile-app { height: 100%; height: 100dvh; display: flex; flex-direction: column; }
+.mobile-header {
+  flex: none; display: flex; align-items: center; gap: 8px; height: 48px; padding: 0 8px 0 12px;
+  background: var(--panel); border-bottom: 1px solid var(--border); font-weight: 600;
+}
+.mobile-header > .icon:first-child { color: var(--accent); }
+.mobile-header .muted { font-size: 12.5px; font-weight: 400; white-space: nowrap; }
+.mobile-header .icon-btn { width: 40px; height: 40px; }
+.mobile-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.mobile-player { flex: none; position: relative; display: flex; flex-direction: column; background: #000; }
+.mobile-video { width: 100%; aspect-ratio: 16 / 9; object-fit: contain; background: #000; }
+.mobile-player-center {
+  position: absolute; left: 0; right: 0; top: 0; aspect-ratio: 16 / 9; padding: 12px;
+  display: grid; place-items: center; text-align: center; pointer-events: none;
+}
+.mobile-player-center > * { pointer-events: auto; }
+.mobile-controls { display: flex; align-items: center; gap: 4px; padding: 6px 8px 6px 12px; background: var(--panel); border-bottom: 1px solid var(--border); }
+.mobile-now { flex: 1; min-width: 0; display: flex; flex-direction: column; font-size: 13px; }
+.mobile-control {
+  flex: none; display: grid; place-items: center; width: 44px; height: 44px; border: none; border-radius: var(--radius);
+  background: transparent; color: var(--text); cursor: pointer;
+}
+.mobile-control.danger { color: var(--danger); }
+.mobile-player:fullscreen { justify-content: center; }
+.mobile-player:fullscreen .mobile-video { height: 100%; aspect-ratio: auto; }
+.mobile-player:fullscreen .mobile-player-center { bottom: 0; aspect-ratio: auto; }
+.mobile-player:fullscreen .mobile-controls { position: absolute; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, .65); border: none; transition: opacity .2s; }
+.mobile-player:fullscreen.fullscreen-idle .mobile-controls { opacity: 0; pointer-events: none; }
+.mobile-list { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 12px; }
+.mobile-list .stream-empty { position: static; flex: 1; }
+.mobile-list-title { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-dim); }
+.mobile-card {
+  flex: none; display: flex; align-items: center; gap: 12px; width: 100%; padding: 8px; text-align: left;
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer;
+}
+.mobile-card.watching { border-color: var(--accent); background: var(--accent-soft); }
+.mobile-card-thumb {
+  position: relative; flex: none; display: grid; place-items: center; width: 112px; aspect-ratio: 16 / 9;
+  border-radius: var(--radius-sm); background: var(--panel-3) center / cover no-repeat; color: var(--text-dim);
+}
+.mobile-card-thumb .badge { position: absolute; left: 4px; top: 4px; font-size: 10px; }
+.mobile-card-text { flex: 1; min-width: 0; display: flex; flex-direction: column; font-size: 13px; }
+.mobile-note { margin-top: auto; padding-top: 8px; color: var(--text-faint); font-size: 12px; text-align: center; }
+@media (orientation: landscape) {
+  .mobile-body { flex-direction: row; }
+  .mobile-player { flex: 3; min-width: 0; overflow-y: auto; }
+  .mobile-player:not([hidden]) + .mobile-list { flex: 2; }
+}
