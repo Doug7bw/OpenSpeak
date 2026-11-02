@@ -1,3 +1,10 @@
+# OpenSpeak 1.0.34 — versão mobile para assistir
+
+- **Versão mobile do site:** no celular e no tablet, o site mostra quem está ao vivo
+  e abre a transmissão em uma tela feita para assistir.
+- A **barra de tarefas** com ocultação automática volta a aparecer ao levar o mouse
+  à borda da tela com o app maximizado.
+
 # OpenSpeak 1.0.33 — organizar em dois cliques
 
 - **Organizar** agora alinha os previews mantendo o tamanho de cada um. Clique de
