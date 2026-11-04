@@ -1,13 +1,32 @@
 # OpenSpeak
 
-Transmissão de vídeo P2P (tela, janela ou câmera, com áudio) inspirada no motor e na
-interface de streaming do TeamSpeak 6. A análise do cliente original está em
-[docs/ANALISE_TEAMSPEAK_P2P.md](docs/ANALISE_TEAMSPEAK_P2P.md).
+> Transmita sua tela, uma janela ou a câmera, com áudio, para os amigos: peer-to-peer, em baixa latência e no
+> seu próprio servidor.
 
-| | |
+**C++20 · Qt 6/QML · WebRTC (libdatachannel) · FFmpeg (NVENC/AMF/Quick Sync) · Node.js · JavaScript**
+
+[**⬇ Baixar para Windows**](https://github.com/JonasHenriqueDev/OpenSpeak/releases/latest/download/OpenSpeak-Setup.exe)
+· [Releases](https://github.com/JonasHenriqueDev/OpenSpeak/releases) · licença AGPL-3.0
+
+## Destaques
+
+- **App nativo para Windows**: captura e encode na GPU (NVENC, AMF, Quick Sync), instalador e atualização
+  automática, com canal opcional de pré-releases.
+- **Servidor próprio** (`openspeak-server`): sinalização e, opcionalmente, **SFU** para distribuir a transmissão a
+  vários espectadores sem sobrecarregar quem transmite. Roda no Windows e no Linux.
+- **Modo Tailnet**: funciona sem servidor nenhum, entre máquinas da mesma rede Tailscale.
+- **Cliente web**: nativo e navegador usam o mesmo protocolo e assistem uns aos outros. No celular, o site abre
+  numa versão só para assistir.
+- **Atividade do Discord**: dá para assistir às transmissões dentro de um canal de voz do Discord
+  ([como funciona](docs/DISCORD_ATIVIDADE.md)).
+- O motor de streaming segue a arquitetura do TeamSpeak 6, com ofertas, sessões por espectador e estatísticas com
+  detecção de problemas ([análise](docs/ANALISE_TEAMSPEAK_P2P.md)).
+
+| Parte | Onde |
 |---|---|
-| **App nativo Windows** (Qt 6 + QML Fluent, libdatachannel, FFmpeg/NVENC) | [native/](native/README.md): instalador `.exe`, servidor e modos avançados |
-| Cliente web + servidor Node | esta página |
+| App nativo Windows e servidor (C++) | [native/](native/README.md): compilação, servidor com SFU, modos avançados |
+| Cliente web e servidor Node | esta página |
+| Bot do Discord e monitoramento | [discord-bot/](discord-bot/README.md), [monitor/](monitor/README.md) |
 
 ## App nativo (recomendado)
 
