@@ -1,3 +1,9 @@
+# OpenSpeak 1.0.38 — menu de qualidade mais limpo
+
+- No menu de qualidade, o modo automático aparece só como **Automática**. A
+  versão que você está recebendo continua indicada pelo ícone, que fica amarelo
+  na qualidade baixa.
+
 # OpenSpeak 1.0.37 — botão de qualidade
 
 - O **botão de qualidade** agora aparece de verdade no vídeo de quem você está

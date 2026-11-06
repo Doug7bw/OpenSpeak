@@ -8,7 +8,7 @@
 # O mapa teste -> arquivos fica em tests/TestSelection.ps1; quem passou é lembrado em build/test-cache-<Config>.json.
 param(
     [string]$Config = 'Release',
-    [string]$Version = '1.0.37',
+    [string]$Version = '1.0.38',
     [switch]$ServerOnly,
     [string]$Tests,
     [switch]$AllTests,

@@ -6,7 +6,7 @@
 #   .\package.ps1 -AllTests      # roda a suíte completa em vez de só os testes afetados
 #   .\package.ps1 -SkipBuild
 param(
-    [string]$Version = '1.0.37',
+    [string]$Version = '1.0.38',
     [switch]$SkipBuild,
     [switch]$AllTests,
     [switch]$Full,
