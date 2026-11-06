@@ -1,6 +1,7 @@
 #include "SfuRelay.h"
 #include "SfuEgress.h"
 #include "SfuForwarder.h"
+#include "SfuLayerPolicy.h"
 #include "SfuIngest.h"
 #include "SfuWsViewer.h"
 
@@ -151,6 +152,7 @@ void SfuRelay::removeViewer(const QString &streamId, int clid)
     auto it = m_streams.find(streamId);
     if (it == m_streams.end())
         return;
+    it->second.layers.erase(clid);
     if (auto ws = it->second.wsViewers.find(clid); ws != it->second.wsViewers.end()) {
         SfuWsViewer *viewer = ws->second;
         it->second.wsViewers.erase(ws);
@@ -172,6 +174,14 @@ void SfuRelay::signaling(const QString &streamId, int fromClid, const QJsonObjec
     Stream &s = it->second;
     if (fromClid == s.ownerClid) {
         s.ingest->onSignalingMessage(payload);
+        return;
+    }
+    if (payload.value("type").toString() == QLatin1String("layer")) {
+        // Espectador escolheu a qualidade (simulcast).
+        if (!s.viewers.count(fromClid) && !s.wsViewers.count(fromClid))
+            return;
+        s.layers[fromClid].policy.preference = sfu::layerPreferenceFromString(payload.value("preference").toString());
+        adjust(s, false);
         return;
     }
     auto viewer = s.viewers.find(fromClid);
@@ -222,21 +232,68 @@ QJsonArray SfuRelay::monitoringSessions()
 
 void SfuRelay::adjustBitrates()
 {
-    // Uma qualidade só para todos: o transmissor segue o espectador mais
-    // limitado (com piso), sem passar do bitrate configurado no stream.
-    for (auto &[id, s] : m_streams) {
-        int target = s.bitrate;
-        bool any = false;
-        for (auto &[clid, egress] : s.viewers) {
+    for (auto &[id, s] : m_streams)
+        adjust(s, true);
+}
+
+void SfuRelay::adjust(Stream &s, bool collect)
+{
+    const auto now = LayerPolicy::Clock::now();
+    // Simulcast só com as duas camadas chegando; sem ele, uma qualidade para
+    // todos: o transmissor segue o espectador mais limitado (com piso).
+    const bool simulcast = s.forwarder->hasLayer(sfu::HighLayer) && s.forwarder->hasLayer(sfu::LowLayer);
+    int high = s.bitrate, low = s.bitrate;
+    bool anyHigh = false;
+    for (auto &[clid, egress] : s.viewers) {
+        if (collect)
             egress->collectStats(s.bitrate);
-            if (egress->state() == RtcSession::State::Connected) {
-                target = std::min(target, egress->estimatedBitrate());
-                any = true;
+        ViewerLayer &v = s.layers[clid];
+        const int estimate = egress->estimatedBitrate();
+        const int layer = simulcast ? v.policy.step(estimate, s.bitrate, now) : sfu::HighLayer;
+        s.forwarder->setSinkLayer(egress->sink(), layer);
+        if (egress->state() == RtcSession::State::Connected) {
+            // Quem forçou a alta assume o risco: a banda dele não puxa a camada
+            // dos outros para baixo.
+            if (layer == sfu::HighLayer && (!simulcast || v.policy.preference == LayerPreference::Auto)) {
+                high = std::min(high, estimate);
+                anyHigh = true;
+            } else if (layer == sfu::LowLayer) {
+                low = std::min(low, estimate);
             }
         }
-        target = any ? std::max(target, std::min(MinTargetBitrate, s.bitrate)) : s.bitrate;
-        s.forwarder->requestBitrate(unsigned(target));
+        reportLayer(s, clid, v, simulcast, layer);
     }
+    for (auto &[clid, ws] : s.wsViewers) {
+        // Sem RR/REMB: alta, a não ser que o espectador peça a baixa.
+        ViewerLayer &v = s.layers[clid];
+        const int layer = simulcast && v.policy.preference == LayerPreference::Low ? sfu::LowLayer : sfu::HighLayer;
+        s.forwarder->setSinkLayer(ws->sink(), layer);
+        reportLayer(s, clid, v, simulcast, layer);
+    }
+    if (!collect)
+        return;
+    const int floor = simulcast ? std::max(MinTargetBitrate, int(s.bitrate * HighLayerFloor)) : MinTargetBitrate;
+    high = anyHigh ? std::max(high, std::min(floor, s.bitrate)) : s.bitrate;
+    s.forwarder->requestBitrate(sfu::HighLayer, unsigned(high));
+    if (simulcast) // o transmissor limita ao bitrate próprio da camada baixa
+        s.forwarder->requestBitrate(sfu::LowLayer, unsigned(std::max(low, 150'000)));
+}
+
+void SfuRelay::reportLayer(Stream &s, int clid, ViewerLayer &v, bool simulcast, int layer)
+{
+    if (v.sent == layer && v.sentSimulcast == simulcast && v.sentPreference == v.policy.preference)
+        return;
+    v.sent = layer;
+    v.sentSimulcast = simulcast;
+    v.sentPreference = v.policy.preference;
+    const QJsonObject payload{{"type", "layer"}, {"simulcast", simulcast},
+                              {"layer", layer == sfu::LowLayer ? "low" : "high"},
+                              {"preference", sfu::layerPreferenceName(v.policy.preference)}};
+    // Pela fila: o contrato do StreamRelay não chama de volta de dentro de signaling().
+    QMetaObject::invokeMethod(this, [this, streamId = s.id, clid, payload] {
+        if (m_signal)
+            m_signal(streamId, clid, payload);
+    }, Qt::QueuedConnection);
 }
 
 } // namespace openspeak

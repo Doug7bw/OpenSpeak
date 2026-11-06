@@ -7,21 +7,12 @@
 
 namespace openspeak {
 
-namespace {
-
-uint8_t u8(const std::byte *p) { return std::to_integer<uint8_t>(*p); }
-
-constexpr uint8_t NalIdr = 5, NalSps = 7, NalStapA = 24, NalFuA = 28;
-bool startsKeyFrame(uint8_t nalType) { return nalType == NalIdr || nalType == NalSps; }
-
-} // namespace
-
 // Roda nas threads da libdatachannel: só acumula e agenda o flush na thread do Qt.
 class SfuWsViewer::Sink : public sfu::EgressSink {
 public:
     explicit Sink(SfuWsViewer *owner) : m_owner(owner) {}
 
-    void send(sfu::Kind kind, const rtc::binary &packet) override
+    void send(sfu::Kind kind, rtc::binary packet) override
     {
         if (packet.size() < 12 || packet.size() > 0xFFFF)
             return;
@@ -91,7 +82,7 @@ SfuWsViewer::SfuWsViewer(std::shared_ptr<sfu::Forwarder> forwarder, SendFn send,
     : QObject(parent), m_forwarder(std::move(forwarder)), m_sink(std::make_shared<Sink>(this)), m_send(std::move(send))
 {
     m_forwarder->addSink(m_sink);
-    m_forwarder->requestKeyFrame();
+    m_forwarder->requestKeyFrame(m_sink.get());
 }
 
 SfuWsViewer::~SfuWsViewer() { stop(); }
@@ -105,7 +96,7 @@ void SfuWsViewer::stop()
 void SfuWsViewer::requestKeyFrame()
 {
     m_sink->waitKeyFrame();
-    m_forwarder->requestKeyFrame();
+    m_forwarder->requestKeyFrame(m_sink.get());
 }
 
 void SfuWsViewer::flush()
@@ -137,36 +128,8 @@ QJsonObject SfuWsViewer::mediaSnapshot() const
     };
 }
 
-bool SfuWsViewer::isKeyFrameStart(const std::byte *data, size_t size)
-{
-    if (size < 13)
-        return false;
-    const uint8_t b0 = u8(data);
-    size_t at = 12 + 4 * size_t(b0 & 0x0F);
-    if (b0 & 0x10) {
-        if (size < at + 4)
-            return false;
-        at += 4 + 4 * size_t(u8(data + at + 2) << 8 | u8(data + at + 3));
-    }
-    if (size <= at)
-        return false;
-    const std::byte *p = data + at;
-    const size_t n = size - at;
-    const uint8_t type = u8(p) & 0x1F;
-    if (type == NalStapA) {
-        for (size_t i = 1; i + 2 < n;) {
-            const size_t len = size_t(u8(p + i) << 8 | u8(p + i + 1));
-            if (len == 0 || i + 2 + len > n)
-                break;
-            if (startsKeyFrame(u8(p + i + 2) & 0x1F))
-                return true;
-            i += 2 + len;
-        }
-        return false;
-    }
-    if (type == NalFuA)
-        return n >= 2 && (u8(p + 1) & 0x80) && startsKeyFrame(u8(p + 1) & 0x1F);
-    return startsKeyFrame(type);
-}
+const sfu::EgressSink *SfuWsViewer::sink() const { return m_sink.get(); }
+
+bool SfuWsViewer::isKeyFrameStart(const std::byte *data, size_t size) { return sfu::isKeyFrameStart(data, size); }
 
 } // namespace openspeak

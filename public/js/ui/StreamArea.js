@@ -252,6 +252,7 @@ export class StreamArea {
       editStream: id => a.editStream(id),
       manageViewers: id => a.manageViewers(id),
       showStats: id => a.showStats(id),
+      setQuality: (id, pref) => m.setQualityPreference(id, pref),
       hideStream: id => {
         const list = this.settings.get('hiddenStreams');
         if (!list.includes(id)) this.settings.set('hiddenStreams', [...list, id]);

@@ -55,6 +55,11 @@ const STRINGS = {
   'video.action.retry': 'Tentar de novo',
   'video.action.dismiss': 'Dispensar',
   'video.action.volume': 'Volume',
+  'video.quality': 'Qualidade',
+  'video.quality.auto': 'Automática',
+  'video.quality.auto_current': 'Automática ({layer})',
+  'video.quality.high': 'Alta',
+  'video.quality.low': 'Baixa',
 
   'video.audio': 'Capturar áudio',
   'video.audio.bitrate': 'Bitrate de áudio [Kbps]',

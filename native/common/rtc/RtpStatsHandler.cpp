@@ -154,7 +154,13 @@ void RtpStatsHandler::onRtcp(const std::byte *data, size_t size)
         } else if (m_sender && pt == 206 && count == 15 && len >= 24) {
             // REMB: "REMB" + num SSRC + expoente(6) + mantissa(18).
             const std::byte *f = p + 12;
-            if (u8(f) == 'R' && u8(f + 1) == 'E' && u8(f + 2) == 'M' && u8(f + 3) == 'B') {
+            // Só vale para esta track: com simulcast, o REMB da camada baixa
+            // (outro SSRC) não pode limitar a alta.
+            const int ssrcs = u8(f + 4);
+            bool mine = !m_ssrc || ssrcs == 0;
+            for (int i = 0; i < ssrcs && size_t(20 + 4 * (i + 1)) <= len; ++i)
+                mine = mine || be32(f + 8 + 4 * i) == m_ssrc;
+            if (mine && u8(f) == 'R' && u8(f + 1) == 'E' && u8(f + 2) == 'M' && u8(f + 3) == 'B') {
                 const uint8_t exp = u8(f + 5) >> 2;
                 const uint32_t mantissa = (uint32_t(u8(f + 5) & 0x03) << 16) | (uint32_t(u8(f + 6)) << 8) | u8(f + 7);
                 m_c.rembBitrate = uint32_t(std::min<uint64_t>(uint64_t(mantissa) << exp, UINT32_MAX));

@@ -88,6 +88,8 @@ public:
     Q_INVOKABLE void attachVideo(const QString &id, QVideoSink *sink);
     Q_INVOKABLE void detachVideo(const QString &id, QVideoSink *sink);
     Q_INVOKABLE void setVolume(const QString &id, double volume);
+    /// Qualidade de um stream assistido no SFU com simulcast: "auto", "high" ou "low".
+    Q_INVOKABLE void setQualityPreference(const QString &id, const QString &preference);
 
     // --- estatísticas
     Q_INVOKABLE QVariantMap stats(const QString &id, int viewerClid) const;
@@ -130,6 +132,7 @@ private:
         StreamConfig config;
         std::unique_ptr<VideoSource> source;
         std::unique_ptr<VideoEncoder> encoder;
+        std::unique_ptr<VideoEncoder> encoderLow; // simulcast (SFU): camada baixa
         std::unique_ptr<AudioCapture> audio;
         QString audioLabel;            // como o áudio está sendo capturado (estatísticas)
         bool excludingDiscord = false; // o Discord (e não o OpenSpeak) está fora da captura
@@ -146,6 +149,12 @@ private:
         QTimer thumbTimer;
         QMap<int, History> history;
         bool sfu() const { return config.mode == StreamMode::SFU; }
+        void pushFrame(const QVideoFrame &f)
+        {
+            encoder->pushFrame(f);
+            if (encoderLow)
+                encoderLow->pushFrame(f);
+        }
     };
     enum class InStatus { Waiting, Connecting, Playing, Reconnecting, Error };
     struct InboundView {
@@ -159,6 +168,10 @@ private:
         History history;
         QList<int> attendees;   // espectadores, pelo notifystreamattendees
         bool attendeesKnown = false;
+        // Simulcast (SFU): o servidor informa a camada recebida.
+        bool simulcast = false;
+        QString layer = QStringLiteral("high");
+        QString qualityPreference = QStringLiteral("auto");
     };
 
     static StreamConfig configFromMap(const QVariantMap &m, const StreamConfig &base);
@@ -172,6 +185,7 @@ private:
     void onClientLeft(const QJsonObject &a);
     void onJoinResponse(const QJsonObject &a);
     void onSignaling(const QJsonObject &a);
+    void sendQualityPreference(const InboundView &view);
     void startMedia(OwnStream &own);
     void startAudioFor(OwnStream &own);
     void configureEncoder(OwnStream &own);

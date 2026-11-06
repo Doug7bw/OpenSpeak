@@ -39,6 +39,8 @@ public:
     /// Pedido do cliente (perda no caminho transmissor -> servidor ou erro do decodificador).
     void requestKeyFrame();
     QJsonObject mediaSnapshot() const;
+    /// Saída deste espectador no Forwarder (escolha de camada do simulcast).
+    const sfu::EgressSink *sink() const;
 
     /// O pacote RTP de vídeo (H.264) começa um keyframe (SPS ou IDR)?
     static bool isKeyFrameStart(const std::byte *data, size_t size);

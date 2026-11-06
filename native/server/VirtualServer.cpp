@@ -324,8 +324,10 @@ QJsonObject VirtualServer::view(const Client &client) const
 {
     QJsonArray channels, clients, streams;
     QJsonArray caps{CapStreamP2P, CapProfiles, CapProfileMedia};
-    if (m_relay)
+    if (m_relay) {
         caps.append(CapStreamSFU);
+        caps.append(CapStreamSimulcast);
+    }
     for (const auto &[cid, ch] : m_channels)
         channels.append(QJsonObject{{"cid", ch.cid}, {"order", ch.order}, {"name", ch.name}, {"description", ch.description}});
     for (const auto &[id, c] : m_clients)

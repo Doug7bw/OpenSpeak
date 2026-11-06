@@ -28,6 +28,7 @@ $script:TestInputs = @{
     tst_virtualserver   = @($protocol, '^native/server/(VirtualServer|ProfileStore|StreamRelay)\.')
     tst_serverhost      = @($protocol, $commonRtc, $server)
     tst_rtprecovery     = @($commonRtc)
+    tst_sfuforwarder    = @($commonRtc, '^native/server/Sfu')
     tst_updates         = @('^native/client/core/(AutoUpdater|UpdatePolicy|Settings)\.')
     tst_cloudconnection = @($protocol, '^native/client/core/ServerConnection\.')
     tst_windowgrabber   = @('^native/client/media/WindowGrabber\.')

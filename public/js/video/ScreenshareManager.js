@@ -188,6 +188,10 @@ export class ScreenshareManager extends EventEmitter {
       error: null,
       session: null,
       stats: null,
+      // Simulcast (SFU nativo): camada que o servidor manda e a escolha do usuário.
+      simulcast: false,
+      layer: 'high',
+      qualityPreference: 'auto',
     };
     this.inbound.set(streamIdentifier, view);
     this.emit('changed');
@@ -429,7 +433,25 @@ export class ScreenshareManager extends EventEmitter {
     session.start();
     view.stats.start();
     for (const payload of this.#takeEarlySignals(streamIdentifier)) session.onSignalingMessage(payload);
+    if (view.peerClid === RELAY_CLID && view.qualityPreference !== 'auto') this.#sendQualityPreference(view);
     this.emit('changed');
+  }
+
+  /** Qualidade de um stream assistido no SFU com simulcast: 'auto' | 'high' | 'low'. */
+  setQualityPreference(streamIdentifier, preference) {
+    const view = this.inbound.get(streamIdentifier);
+    if (!view) return;
+    const pref = preference === 'high' || preference === 'low' ? preference : 'auto';
+    if (view.qualityPreference === pref) return;
+    view.qualityPreference = pref;
+    if (view.session && view.peerClid === RELAY_CLID) this.#sendQualityPreference(view);
+    this.emit('changed');
+  }
+
+  #sendQualityPreference(view) {
+    this.connection.sendCommand('streamsignaling', {
+      streamIdentifier: view.streamIdentifier, clid: RELAY_CLID, payload: { type: 'layer', preference: view.qualityPreference },
+    }).catch(() => {});
   }
 
   #onSignaling({ streamIdentifier, clid, payload }) {
@@ -439,6 +461,13 @@ export class ScreenshareManager extends EventEmitter {
       return;
     }
     const view = this.inbound.get(streamIdentifier);
+    if (view && clid === RELAY_CLID && payload?.type === 'layer') {
+      // Camada do simulcast que o servidor está mandando (pode chegar antes da resposta de entrada).
+      view.simulcast = !!payload.simulcast;
+      view.layer = payload.layer === 'low' ? 'low' : 'high';
+      this.emit('changed');
+      return;
+    }
     if (view?.session) {
       if (clid === view.peerClid) view.session.onSignalingMessage(payload);
       return;

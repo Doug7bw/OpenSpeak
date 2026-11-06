@@ -83,7 +83,7 @@ target_link_libraries(openspeak_server_host PUBLIC openspeak_server_core Qt6::Ne
 target_precompile_headers(openspeak_server_host PRIVATE ${OPENSPEAK_PCH})
 if(OPENSPEAK_BUILD_SFU)
     target_sources(openspeak_server_host PRIVATE
-        server/SfuForwarder.cpp server/SfuForwarder.h
+        server/SfuForwarder.cpp server/SfuForwarder.h server/SfuLayerPolicy.h
         server/SfuIngest.cpp server/SfuIngest.h
         server/SfuEgress.cpp server/SfuEgress.h
         server/SfuRelay.cpp server/SfuRelay.h
@@ -129,6 +129,11 @@ if(OPENSPEAK_BUILD_TESTS)
         qt_add_executable(tst_rtprecovery tests/tst_rtprecovery.cpp)
         target_link_libraries(tst_rtprecovery PRIVATE openspeak_rtc Qt6::Test)
         add_test(NAME tst_rtprecovery COMMAND tst_rtprecovery)
+    endif()
+    if(OPENSPEAK_BUILD_SFU)
+        qt_add_executable(tst_sfuforwarder tests/tst_sfuforwarder.cpp)
+        target_link_libraries(tst_sfuforwarder PRIVATE openspeak_server_host Qt6::Test)
+        add_test(NAME tst_sfuforwarder COMMAND tst_sfuforwarder)
     endif()
     if(OPENSPEAK_BUILD_CLIENT)
         add_subdirectory(tests/client)

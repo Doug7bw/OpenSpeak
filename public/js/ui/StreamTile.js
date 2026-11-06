@@ -4,7 +4,7 @@
 import { h, replaceChildren } from './dom.js';
 import { icon } from './icons.js';
 import { t } from './i18n.js';
-import { StreamAccess, StreamType, Severity } from '../core/protocol.js';
+import { StreamAccess, StreamType, Severity, RELAY_CLID } from '../core/protocol.js';
 import { InboundStatus } from '../video/ScreenshareManager.js';
 import { installFullscreenIdle } from './fullscreenIdle.js';
 import { viewerCount } from './viewerCount.js';
@@ -262,6 +262,7 @@ export class StreamTile {
           ? h('div.tile-center', h('div.status-pill', h('span.spinner'), t('video.join.status.reconnecting'))) : null,
         h('div.tile-actions',
           this.#volumeControl(),
+          view.simulcast && view.peerClid === RELAY_CLID ? this.#qualityControl(view, id) : null,
           btn('chart', t('video.action.stats'), () => a.showStats(id)),
           h('span.spacer'),
           this.pipWindow ? null : btn('eyeOff', t('video.stream.hide_stream'), () => a.hideStream(id)),
@@ -333,6 +334,23 @@ export class StreamTile {
       }, icon(sev >= Severity.MAJOR ? 'warning' : 'info')) : null,
       viewerCount(info?.viewerCount, () => this.actions.viewerNames(this.streamIdentifier)),
     );
+  }
+
+  /** Simulcast (SFU): automático, alta ou baixa. */
+  #qualityControl(view, id) {
+    const layer = t(view.layer === 'low' ? 'video.quality.low' : 'video.quality.high');
+    const option = (value, label) => h('option', { value, selected: view.qualityPreference === value }, label);
+    return h('select.quality-select', {
+      class: view.layer === 'low' ? 'low' : '',
+      title: t('video.quality'), 'aria-label': t('video.quality'),
+      on: {
+        click: ev => ev.stopPropagation(),
+        change: ev => this.actions.setQuality(id, ev.target.value),
+      },
+    },
+    option('auto', t('video.quality.auto_current', { layer })),
+    option('high', t('video.quality.high')),
+    option('low', t('video.quality.low')));
   }
 
   #volumeControl() {

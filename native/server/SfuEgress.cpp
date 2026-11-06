@@ -24,8 +24,9 @@ uint64_t ntpNow()
 /// vem do Forwarder, ancorado nos SRs do próprio transmissor (lip-sync).
 class SfuEgress::SrReporter final : public rtc::MediaHandler {
 public:
-    SrReporter(std::shared_ptr<sfu::Forwarder> forwarder, sfu::Kind kind, uint32_t ssrc, std::string cname)
-        : m_forwarder(std::move(forwarder)), m_kind(kind), m_ssrc(ssrc), m_cname(std::move(cname)) {}
+    SrReporter(std::shared_ptr<sfu::Forwarder> forwarder, std::shared_ptr<sfu::EgressSink> sink, sfu::Kind kind, uint32_t ssrc,
+               std::string cname)
+        : m_forwarder(std::move(forwarder)), m_sink(std::move(sink)), m_kind(kind), m_ssrc(ssrc), m_cname(std::move(cname)) {}
 
     void outgoing(rtc::message_vector &messages, const rtc::message_callback &send) override
     {
@@ -40,7 +41,7 @@ public:
         const auto now = std::chrono::steady_clock::now();
         if (!m_packets || now - m_last < std::chrono::seconds(1))
             return;
-        const auto rtp = m_forwarder->rtpNow(m_kind);
+        const auto rtp = m_forwarder->rtpNow(m_kind, m_sink.get());
         if (!rtp)
             return;
         m_last = now;
@@ -64,6 +65,7 @@ public:
 
 private:
     std::shared_ptr<sfu::Forwarder> m_forwarder;
+    std::shared_ptr<sfu::EgressSink> m_sink; // vídeo: o timestamp de saída é deste espectador
     const sfu::Kind m_kind;
     const uint32_t m_ssrc;
     const std::string m_cname;
@@ -103,24 +105,29 @@ void SfuEgress::setupPeerConnection(rtc::PeerConnection &pc)
     const uint32_t videoSsrc = rng->generate() | 1;
     const uint32_t audioSsrc = rng->generate() | 1;
     auto forwarder = m_forwarder;
+    std::weak_ptr<sfu::EgressSink> weakSink = m_sink;
+    auto keyFrame = [forwarder, weakSink] {
+        if (const auto sink = weakSink.lock())
+            forwarder->requestKeyFrame(sink.get());
+    };
 
     rtc::Description::Video vdesc("video", rtc::Description::Direction::SendOnly);
     vdesc.addH264Codec(sfu::VideoPayloadType, sfu::H264Profile);
     vdesc.addSSRC(videoSsrc, cname, msid, "video");
     auto video = pc.addTrack(vdesc);
-    auto vhead = std::make_shared<SrReporter>(forwarder, sfu::Kind::Video, videoSsrc, cname);
+    auto vhead = std::make_shared<SrReporter>(forwarder, m_sink, sfu::Kind::Video, videoSsrc, cname);
     auto vstats = std::make_shared<RtpStatsHandler>(sfu::VideoClockRate, true);
     vhead->addToChain(std::make_shared<rtc::RtcpNackResponder>());
-    vhead->addToChain(std::make_shared<rtc::PliHandler>([forwarder] { forwarder->requestKeyFrame(); })); // PLI do espectador
+    vhead->addToChain(std::make_shared<rtc::PliHandler>(keyFrame)); // PLI do espectador: keyframe da camada dele
     vhead->addToChain(vstats);
     video->setMediaHandler(vhead);
-    video->onOpen([forwarder] { forwarder->requestKeyFrame(); }); // espectador novo começa num keyframe
+    video->onOpen(keyFrame); // espectador novo começa num keyframe
 
     rtc::Description::Audio adesc("audio", rtc::Description::Direction::SendOnly);
     adesc.addOpusCodec(sfu::AudioPayloadType);
     adesc.addSSRC(audioSsrc, cname, msid, "audio");
     auto audio = pc.addTrack(adesc);
-    auto ahead = std::make_shared<SrReporter>(forwarder, sfu::Kind::Audio, audioSsrc, cname);
+    auto ahead = std::make_shared<SrReporter>(forwarder, nullptr, sfu::Kind::Audio, audioSsrc, cname);
     ahead->addToChain(std::make_shared<rtc::RtcpNackResponder>());
     audio->setMediaHandler(ahead);
 

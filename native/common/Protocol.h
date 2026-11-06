@@ -43,6 +43,9 @@ inline const QString ProfileRequired = QStringLiteral("profile_required");
 // Extensões anunciadas em capabilityExtensions (TS: STREAM_P2P / STREAM_SFU).
 inline const QString CapStreamP2P = QStringLiteral("STREAM_P2P");
 inline const QString CapStreamSFU = QStringLiteral("STREAM_SFU"); // só com relay de mídia (servidor nativo)
+/// O relay aceita duas camadas de vídeo do transmissor (mid "video-low") e a
+/// escolha de qualidade do espectador (`streamsignaling` {type:'layer'}).
+inline const QString CapStreamSimulcast = QStringLiteral("STREAM_SFU_SIMULCAST");
 inline const QString CapProfiles = QStringLiteral("PROFILES");    // perfis guardados no servidor
 inline const QString CapProfileMedia = QStringLiteral("PROFILE_MEDIA"); // banner baixado sob demanda
 

@@ -33,7 +33,8 @@ public:
 /// de sincronismo. Não altera as mensagens; a RtcpReceivingSession vem depois.
 class SfuIngest::Tap final : public rtc::MediaHandler {
 public:
-    Tap(std::shared_ptr<sfu::Forwarder> forwarder, sfu::Kind kind) : m_forwarder(std::move(forwarder)), m_kind(kind) {}
+    Tap(std::shared_ptr<sfu::Forwarder> forwarder, sfu::Kind kind, int layer)
+        : m_forwarder(std::move(forwarder)), m_kind(kind), m_layer(layer) {}
     void retire() { m_active = false; }
 
     void incoming(rtc::message_vector &messages, const rtc::message_callback &) override
@@ -46,7 +47,7 @@ public:
             if (m->type == rtc::Message::Control)
                 onRtcp(m->data(), m->size());
             else if (m->type == rtc::Message::Binary)
-                m_forwarder->onRtp(m_kind, m->data(), m->size());
+                m_forwarder->onRtp(m_kind, m_layer, m->data(), m->size());
         }
     }
 
@@ -63,13 +64,14 @@ private:
             if (offset + len > size)
                 break;
             if (u8(p + 1) == 200 && len >= 28)
-                m_forwarder->onSenderReport(m_kind, be32(p + 4), be32(p + 16));
+                m_forwarder->onSenderReport(m_kind, m_layer, be32(p + 4), be32(p + 16));
             offset += len;
         }
     }
 
     std::shared_ptr<sfu::Forwarder> m_forwarder;
     const sfu::Kind m_kind;
+    const int m_layer;
     std::atomic<bool> m_active{true};
 };
 
@@ -109,7 +111,8 @@ void SfuIngest::retireTaps()
         track->resetCallbacks();
     m_taps.clear();
     m_tracks.clear();
-    m_forwarder->setIngestVideoTrack(nullptr);
+    for (int layer = 0; layer < sfu::MaxLayers; ++layer)
+        m_forwarder->setIngestVideoTrack(layer, nullptr);
 }
 
 void SfuIngest::onRemoteTrack(std::shared_ptr<rtc::Track> track)
@@ -123,19 +126,21 @@ void SfuIngest::onRemoteTrack(std::shared_ptr<rtc::Track> track)
         kind = sfu::Kind::Audio;
     else
         return;
+    // Simulcast do transmissor nativo: a camada baixa vem numa m-line própria.
+    const int layer = kind == sfu::Kind::Video && desc.mid() == sfu::LowLayerMid ? sfu::LowLayer : sfu::HighLayer;
 
     // A entrada percorre a cadeia do fim para o início:
     // recuperação (NACK) -> Tap -> sessão RTCP -> Drain.
     auto drain = std::make_shared<Drain>();
     auto session = std::make_shared<rtc::RtcpReceivingSession>(); // RR + PLI + REMB
-    auto tap = std::make_shared<Tap>(m_forwarder, kind);
+    auto tap = std::make_shared<Tap>(m_forwarder, kind, layer);
     track->setMediaHandler(drain);
     drain->addToChain(session);
     drain->addToChain(tap);
     if (kind == sfu::Kind::Video) // reenvio do que se perdeu no caminho até o SFU
         drain->addToChain(std::make_shared<RtpRecoveryHandler>(RtpRecoveryBuffer::Mode::PassThrough));
     if (kind == sfu::Kind::Video) {
-        m_forwarder->setIngestVideoTrack(track);
+        m_forwarder->setIngestVideoTrack(layer, track);
         auto forwarder = m_forwarder;
         track->onOpen([forwarder] { forwarder->requestKeyFrame(); });
     }

@@ -27,6 +27,8 @@ public:
     /// Atualiza a estimativa de banda deste espectador (1 Hz).
     void collectStats(int configuredBitrate);
     int estimatedBitrate() const { return m_estimate; }
+    /// Saída deste espectador no Forwarder (escolha de camada do simulcast).
+    const sfu::EgressSink *sink() const { return m_sink.get(); }
     QJsonObject mediaSnapshot();
 
 protected:

@@ -368,6 +368,12 @@ select.input { padding-right: 4px; }
 }
 .volume { display: inline-flex; align-items: center; }
 .volume-slider { width: 80px; accent-color: var(--accent); }
+.quality-select {
+  background: rgba(0, 0, 0, 0.5); color: #fff; border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 6px; padding: 2px 6px; font: inherit; font-size: 12px; cursor: pointer;
+}
+.quality-select.low { border-color: var(--warn, #e0a030); }
+.video-stream.small .quality-select { display: none; }
 
 .stream-preview { position: absolute; inset: 0; display: grid; place-items: center; overflow: hidden; }
 .stream-preview__thumb {

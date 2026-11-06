@@ -27,6 +27,23 @@ QVariantMap historyEntry(const StatsSummary &s, bool inbound)
     };
 }
 
+// Simulcast (SFU): camada baixa para quem não aguenta a alta. Só vale a pena
+// quando a alta é bem maior que ela.
+constexpr int LowLayerMaxWidth = 854, LowLayerMaxHeight = 480;
+
+bool simulcastWorthIt(int bitrate, int height) { return bitrate >= 1'200'000 && (height <= 0 || height >= 540); }
+
+VideoEncoderConfig lowLayerConfig(int width, int height, int fps, int bitrate, bool screenContent)
+{
+    VideoEncoderConfig ec;
+    ec.maxWidth = width > 0 ? std::min(width, LowLayerMaxWidth) : LowLayerMaxWidth;
+    ec.maxHeight = height > 0 ? std::min(height, LowLayerMaxHeight) : LowLayerMaxHeight;
+    ec.fps = std::min(fps, 30);
+    ec.bitrate = std::clamp(bitrate / 5, 300'000, 900'000);
+    ec.screenContent = screenContent;
+    return ec;
+}
+
 void pushHistory(QList<QVariantMap> &list, QVariantMap entry)
 {
     list.append(std::move(entry));
@@ -274,6 +291,9 @@ void ScreenshareManager::configureEncoder(OwnStream &own)
     ec.bitrate = own.config.bitrate;
     ec.screenContent = own.config.type != StreamType::Camera;
     own.encoder->setConfig(ec);
+    if (own.encoderLow)
+        own.encoderLow->setConfig(lowLayerConfig(own.config.width, own.config.height, own.config.fps, own.config.bitrate,
+                                                 ec.screenContent));
 }
 
 void ScreenshareManager::startMedia(OwnStream &own)
@@ -292,7 +312,20 @@ void ScreenshareManager::startMedia(OwnStream &own)
         for (SessionOutbound *s : std::as_const(p->sinks))
             s->sendVideo(frame);
     });
-    connect(own.source.get(), &VideoSource::frameAvailable, this, [p](const QVideoFrame &f) { p->encoder->pushFrame(f); });
+    // Simulcast: segundo encoder, a camada baixa, que o servidor entrega a quem
+    // não aguenta a alta (ou pediu a baixa). Servidores antigos não sabem
+    // separar as camadas, por isso só com a capacidade anunciada.
+    if (own.sfu() && m_handler->hasSimulcast() && simulcastWorthIt(own.config.bitrate, own.config.height)) {
+        own.encoderLow = std::make_unique<VideoEncoder>();
+        own.encoderLow->start(lowLayerConfig(own.config.width, own.config.height, own.config.fps, own.config.bitrate,
+                                             ec.screenContent),
+                              [p](const EncodedVideoFrame &frame) {
+                                  std::lock_guard lock(p->sinkMutex);
+                                  for (SessionOutbound *s : std::as_const(p->sinks))
+                                      s->sendVideoLow(frame);
+                              });
+    }
+    connect(own.source.get(), &VideoSource::frameAvailable, this, [p](const QVideoFrame &f) { p->pushFrame(f); });
     const QString id = own.id;
     connect(own.source.get(), &VideoSource::ended, this, [this, id] { stopStream(id); });
 
@@ -447,7 +480,9 @@ void ScreenshareManager::changeSource(const QString &id)
     own.config.app = own.source->appName();
     configureEncoder(own);
     own.encoder->requestKeyFrame();
-    connect(own.source.get(), &VideoSource::frameAvailable, this, [p](const QVideoFrame &f) { p->encoder->pushFrame(f); });
+    if (own.encoderLow)
+        own.encoderLow->requestKeyFrame();
+    connect(own.source.get(), &VideoSource::frameAvailable, this, [p](const QVideoFrame &f) { p->pushFrame(f); });
     connect(own.source.get(), &VideoSource::ended, this, [this, id] { stopStream(id); });
     startAudioFor(own); // o áudio acompanha a nova fonte
     m_conn->sendCommand(QStringLiteral("updatestream"), {{"streamIdentifier", id}, {"type", int(own.config.type)}, {"app", own.config.app}});
@@ -477,9 +512,13 @@ void ScreenshareManager::setPaused(const QString &id, bool paused)
     if (it == m_own.end())
         return;
     it->second->paused = paused;
-    it->second->encoder->setPaused(paused);
-    if (!paused)
-        it->second->encoder->requestKeyFrame();
+    for (VideoEncoder *encoder : {it->second->encoder.get(), it->second->encoderLow.get()}) {
+        if (!encoder)
+            continue;
+        encoder->setPaused(paused);
+        if (!paused)
+            encoder->requestKeyFrame();
+    }
     m_conn->sendCommand(QStringLiteral("updatestream"), {{"streamIdentifier", id}, {"paused", paused}});
     notifyChanged();
 }
@@ -847,6 +886,10 @@ SessionOutbound *ScreenshareManager::addOutbound(OwnStream &own, int peerClid, c
             m_conn->sendCommand(QStringLiteral("streamsignaling"), {{"streamIdentifier", id}, {"clid", peerClid}, {"payload", payload}});
         },
         [encoder] { encoder->requestKeyFrame(); }, this);
+    if (relay && own.encoderLow) {
+        VideoEncoder *low = own.encoderLow.get();
+        session->enableLowLayer([low] { low->requestKeyFrame(); });
+    }
     // A sessão com o servidor (SFU) segue a rota normal, nunca a da tailnet.
     if (!relay && (m_handler->cloudMode() || (!m_handler->meshMode() && QUrl(m_settings->serverUrl()).host().endsWith(QLatin1String(".ts.net")))) && m_handler->directory())
         session->setBindAddress(m_handler->directory()->self().address.toString());
@@ -977,6 +1020,8 @@ void ScreenshareManager::onJoinResponse(const QJsonObject &a)
     session->start();
     for (const QJsonObject &payload : m_earlySignals.take(id))
         session->onSignalingMessage(payload);
+    if (relay && it->qualityPreference != QLatin1String("auto"))
+        sendQualityPreference(*it);
     notifyChanged();
 }
 
@@ -992,6 +1037,13 @@ void ScreenshareManager::onSignaling(const QJsonObject &a)
         return;
     }
     auto view = m_inbound.find(id);
+    if (view != m_inbound.end() && clid == RelayClid && payload.value("type").toString() == QLatin1String("layer")) {
+        // Camada do simulcast que o servidor está mandando (pode chegar antes da resposta de entrada).
+        view->simulcast = payload.value("simulcast").toBool();
+        view->layer = payload.value("layer").toString() == QLatin1String("low") ? QStringLiteral("low") : QStringLiteral("high");
+        notifyChanged();
+        return;
+    }
     if (view != m_inbound.end() && view->session) {
         if (clid == view->peerClid)
             view->session->onSignalingMessage(payload);
@@ -999,6 +1051,28 @@ void ScreenshareManager::onSignaling(const QJsonObject &a)
     }
     // A oferta chegou antes da resposta de entrada: guarda.
     m_earlySignals[id].append(payload);
+}
+
+void ScreenshareManager::setQualityPreference(const QString &id, const QString &preference)
+{
+    auto it = m_inbound.find(id);
+    if (it == m_inbound.end())
+        return;
+    const QString pref = preference == QLatin1String("high") || preference == QLatin1String("low") ? preference
+                                                                                                   : QStringLiteral("auto");
+    if (it->qualityPreference == pref)
+        return;
+    it->qualityPreference = pref;
+    if (it->session && it->peerClid == RelayClid)
+        sendQualityPreference(*it);
+    notifyChanged();
+}
+
+void ScreenshareManager::sendQualityPreference(const InboundView &view)
+{
+    m_conn->sendCommand(QStringLiteral("streamsignaling"),
+                        {{"streamIdentifier", view.id}, {"clid", RelayClid},
+                         {"payload", QJsonObject{{"type", "layer"}, {"preference", view.qualityPreference}}}});
 }
 
 void ScreenshareManager::setInboundError(InboundView &view, const QString &key)
@@ -1020,6 +1094,8 @@ void ScreenshareManager::disposeOwn(const QString &id)
     if (own.audio)
         own.audio->stop();
     own.encoder->stop();
+    if (own.encoderLow)
+        own.encoderLow->stop();
     own.source->disconnect(this);
     own.source->close();
     for (int clid : own.sessions.keys())
@@ -1065,6 +1141,17 @@ void ScreenshareManager::collectStats()
             pushHistory(h.audio, historyEntry(s->audioStats(), false));
         }
         own.encoder->setTargetBitrate(any ? bitrate : own.config.bitrate);
+        if (own.encoderLow) {
+            // Camada baixa: REMB do servidor (espectadores nela) e perda no
+            // upload; nunca acima da metade do que a alta está usando.
+            const int configured = lowLayerConfig(own.config.width, own.config.height, own.config.fps, own.config.bitrate,
+                                                  true).bitrate;
+            int low = configured;
+            for (SessionOutbound *s : std::as_const(own.sessions))
+                if (s->hasLowLayer())
+                    low = std::min(low, s->collectLowLayer(configured));
+            own.encoderLow->setTargetBitrate(std::min(low, std::max(150'000, bitrate / 2)));
+        }
         if (!own.sessions.isEmpty())
             emit statsChanged(id);
     }
@@ -1182,6 +1269,9 @@ QVariantList ScreenshareManager::items() const
             item["volume"] = v->volume;
             item["audioBlocked"] = m_inboundMuted;
             item["hasVideo"] = v->session && v->session->hasVideo();
+            item["simulcast"] = v->simulcast && v->peerClid == RelayClid;
+            item["layer"] = v->layer;
+            item["qualityPreference"] = v->qualityPreference;
             if (v->session)
                 severity = std::max(v->session->videoStats().worstSeverity(), v->session->audioStats().worstSeverity());
         }

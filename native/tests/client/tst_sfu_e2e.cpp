@@ -164,6 +164,21 @@ private slots:
         QVERIFY(media.value("sentBytes").toDouble() > 0);
         QVERIFY(media.value("receivedBytes").toDouble() > 0);
 
+        // Simulcast: os dois começam na camada alta. C escolhe a baixa e passa a
+        // receber 480p; B continua em 720p. De volta ao automático, C volta à alta.
+        QTRY_VERIFY_WITH_TIMEOUT(item(mc, id).value("simulcast").toBool(), 5000);
+        QCOMPARE(item(mc, id).value("layer").toString(), QStringLiteral("high"));
+        mc.setQualityPreference(id, QStringLiteral("low"));
+        QCOMPARE(item(mc, id).value("qualityPreference").toString(), QStringLiteral("low"));
+        QTRY_COMPARE_WITH_TIMEOUT(item(mc, id).value("layer").toString(), QStringLiteral("low"), 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(sizeC.height(), 480, 10000);
+        const int beforeLowB = framesB;
+        QTRY_VERIFY_WITH_TIMEOUT(framesB >= beforeLowB + 15, 10000);
+        QCOMPARE(sizeB, QSize(1280, 720));
+        mc.setQualityPreference(id, QStringLiteral("auto"));
+        QTRY_COMPARE_WITH_TIMEOUT(item(mc, id).value("layer").toString(), QStringLiteral("high"), 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(sizeC, QSize(1280, 720), 10000);
+
         // Kick de um espectador não afeta o outro.
         ma.removeViewer(id, c.ownClid(), false);
         QTRY_COMPARE_WITH_TIMEOUT(item(mc, id).value("errorKey").toString(), QStringLiteral("video.join.error.kicked"), 3000);

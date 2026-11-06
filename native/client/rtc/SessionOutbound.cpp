@@ -12,6 +12,25 @@ constexpr int AudioPayloadType = 111;
 // Constrained Baseline nível 5.2: aceito por qualquer navegador, até 4K.
 const char *const H264Profile = "profile-level-id=42e034;packetization-mode=1;level-asymmetry-allowed=1";
 constexpr int MinBitrate = 150'000;
+// mid da camada baixa do simulcast (sfu::LowLayerMid no servidor).
+const char *const LowLayerMid = "video-low";
+
+/// Controle de congestionamento por perda (AIMD sobre a perda do RR), limitado
+/// pelo REMB quando o receptor envia.
+int aimd(int estimate, const RtpCounters &c, bool newReport, int configured)
+{
+    if (estimate <= 0)
+        estimate = configured;
+    if (newReport) {
+        if (c.fractionLost > 0.10)
+            estimate = int(estimate * (1.0 - 0.5 * c.fractionLost));
+        else if (c.fractionLost < 0.02)
+            estimate = int(estimate * 1.05);
+    }
+    if (c.rembBitrate > 0)
+        estimate = std::min<int>(estimate, int(c.rembBitrate));
+    return std::clamp(estimate, std::min(MinBitrate, configured), configured);
+}
 } // namespace
 
 SessionOutbound::SessionOutbound(QString streamId, int peerClid, QJsonArray iceServers, QStringList remoteCodecs, SignalFn send,
@@ -74,21 +93,38 @@ void SessionOutbound::setupPeerConnection(rtc::PeerConnection &pc)
     apack->addToChain(astats);
     audio->setMediaHandler(apack);
 
+    std::shared_ptr<rtc::Track> videoLow;
+    std::shared_ptr<RtpStatsHandler> lowStats;
+    if (m_requestKeyFrameLow) {
+        auto keyFrameLow = m_requestKeyFrameLow;
+        m_videoLowSsrc = rng->generate() | 1;
+        rtc::Description::Video ldesc(LowLayerMid, rtc::Description::Direction::SendOnly);
+        ldesc.addH264Codec(VideoPayloadType, H264Profile);
+        ldesc.addSSRC(m_videoLowSsrc, cname, msid, LowLayerMid);
+        videoLow = pc.addTrack(ldesc);
+        auto lcfg = std::make_shared<rtc::RtpPacketizationConfig>(m_videoLowSsrc, cname, VideoPayloadType,
+                                                                  rtc::H264RtpPacketizer::ClockRate);
+        auto lpack = std::make_shared<rtc::H264RtpPacketizer>(rtc::NalUnit::Separator::StartSequence, lcfg);
+        lowStats = std::make_shared<RtpStatsHandler>(rtc::H264RtpPacketizer::ClockRate, true);
+        lpack->addToChain(std::make_shared<rtc::RtcpSrReporter>(lcfg));
+        lpack->addToChain(std::make_shared<rtc::RtcpNackResponder>());
+        lpack->addToChain(std::make_shared<rtc::PliHandler>([keyFrameLow] { keyFrameLow(); }));
+        lpack->addToChain(lowStats);
+        videoLow->setMediaHandler(lpack);
+        videoLow->onOpen([keyFrameLow] { keyFrameLow(); });
+    }
+
     std::lock_guard lock(m_mediaMutex);
-    m_media = {video, audio, vstats, astats};
+    m_media = {video, audio, vstats, astats, videoLow, lowStats};
     m_prevVideo = {};
     m_prevAudio = {};
+    m_prevVideoLow = {};
 }
 
 QString SessionOutbound::transformLocalSdp(const QString &sdp) { return sdp::opusStereo(sdp, 510'000); }
 
-void SessionOutbound::sendVideo(const EncodedVideoFrame &frame)
+void SessionOutbound::sendFrame(const std::shared_ptr<rtc::Track> &track, const EncodedVideoFrame &frame)
 {
-    std::shared_ptr<rtc::Track> track;
-    {
-        std::lock_guard lock(m_mediaMutex);
-        track = m_media.video;
-    }
     if (!track || !track->isOpen())
         return;
     try {
@@ -97,6 +133,41 @@ void SessionOutbound::sendVideo(const EncodedVideoFrame &frame)
     } catch (const std::exception &) {
         // track fechando durante uma reconexão
     }
+}
+
+void SessionOutbound::sendVideo(const EncodedVideoFrame &frame)
+{
+    std::shared_ptr<rtc::Track> track;
+    {
+        std::lock_guard lock(m_mediaMutex);
+        track = m_media.video;
+    }
+    sendFrame(track, frame);
+}
+
+void SessionOutbound::sendVideoLow(const EncodedVideoFrame &frame)
+{
+    std::shared_ptr<rtc::Track> track;
+    {
+        std::lock_guard lock(m_mediaMutex);
+        track = m_media.videoLow;
+    }
+    sendFrame(track, frame);
+}
+
+int SessionOutbound::collectLowLayer(int configuredBitrate)
+{
+    std::shared_ptr<RtpStatsHandler> stats;
+    {
+        std::lock_guard lock(m_mediaMutex);
+        stats = m_media.videoLowStats;
+    }
+    if (!stats)
+        return configuredBitrate;
+    const RtpCounters c = stats->snapshot();
+    m_lowEstimate = aimd(m_lowEstimate, c, c.receiverReports != m_prevVideoLow.receiverReports, configuredBitrate);
+    m_prevVideoLow = c;
+    return m_lowEstimate;
 }
 
 void SessionOutbound::sendAudio(const QByteArray &opus, quint32 rtpTimestamp)
@@ -153,18 +224,7 @@ void SessionOutbound::collectStats(const VideoEncoderStats &enc, const TargetQua
 
     // Controle de congestionamento por espectador (AIMD sobre a perda do RR,
     // limitado pelo REMB quando o receptor envia).
-    if (m_estimate <= 0)
-        m_estimate = configuredBitrate;
-    if (newReport) {
-        const double loss = vc.fractionLost;
-        if (loss > 0.10)
-            m_estimate = int(m_estimate * (1.0 - 0.5 * loss));
-        else if (loss < 0.02)
-            m_estimate = int(m_estimate * 1.05);
-    }
-    if (vc.rembBitrate > 0)
-        m_estimate = std::min<int>(m_estimate, int(vc.rembBitrate));
-    m_estimate = std::clamp(m_estimate, MinBitrate, configuredBitrate);
+    m_estimate = aimd(m_estimate, vc, newReport, configuredBitrate);
 
     m_video.targetBitrate = m_estimate;
     m_video.video.hasEncode = true;

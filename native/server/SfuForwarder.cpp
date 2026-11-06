@@ -28,7 +28,47 @@ uint32_t ticks(std::chrono::steady_clock::duration d, uint32_t clockRate)
     return uint32_t(std::max(0.0, std::chrono::duration<double>(d).count()) * clockRate);
 }
 
+constexpr uint8_t NalIdr = 5, NalSps = 7, NalStapA = 24, NalFuA = 28;
+bool startsKeyFrame(uint8_t nalType) { return nalType == NalIdr || nalType == NalSps; }
+
+/// Depois de abrir uma camada, por quantos pacotes descartar os anteriores ao
+/// keyframe (retransmissões atrasadas); passado isso a comparação de seq daria
+/// a volta nos 16 bits.
+constexpr int SwitchGuardPackets = 4000;
+
 } // namespace
+
+bool isKeyFrameStart(const std::byte *data, size_t size)
+{
+    if (size < 13)
+        return false;
+    const uint8_t b0 = u8(data);
+    size_t at = 12 + 4 * size_t(b0 & 0x0F);
+    if (b0 & 0x10) {
+        if (size < at + 4)
+            return false;
+        at += 4 + 4 * size_t(u8(data + at + 2) << 8 | u8(data + at + 3));
+    }
+    if (size <= at)
+        return false;
+    const std::byte *p = data + at;
+    const size_t n = size - at;
+    const uint8_t type = u8(p) & 0x1F;
+    if (type == NalStapA) {
+        for (size_t i = 1; i + 2 < n;) {
+            const size_t len = size_t(u8(p + i) << 8 | u8(p + i + 1));
+            if (len == 0 || i + 2 + len > n)
+                break;
+            if (startsKeyFrame(u8(p + i + 2) & 0x1F))
+                return true;
+            i += 2 + len;
+        }
+        return false;
+    }
+    if (type == NalFuA)
+        return n >= 2 && (u8(p + 1) & 0x80) && startsKeyFrame(u8(p + 1) & 0x1F);
+    return startsKeyFrame(type);
+}
 
 // ================================================================ EgressSink
 
@@ -48,7 +88,7 @@ void EgressSink::detach()
     m_audio.reset();
 }
 
-void EgressSink::send(Kind kind, const rtc::binary &packet)
+void EgressSink::send(Kind kind, rtc::binary packet)
 {
     std::shared_ptr<rtc::Track> track;
     uint32_t ssrc = 0;
@@ -59,28 +99,161 @@ void EgressSink::send(Kind kind, const rtc::binary &packet)
     }
     if (!track || !track->isOpen() || packet.size() < 12)
         return;
-    rtc::binary copy = packet;
-    put32(copy.data() + 8, ssrc);
+    put32(packet.data() + 8, ssrc);
+    const size_t size = packet.size();
     try {
-        track->send(std::move(copy));
-        m_sentBytes += packet.size();
+        track->send(std::move(packet));
+        m_sentBytes += size;
     } catch (const std::exception &) {
         // track fechando durante uma reconexão do espectador
     }
 }
 
-// ================================================================= Forwarder
+// ==================================================================== Output
 
-void Forwarder::setIngestVideoTrack(const std::shared_ptr<rtc::Track> &track)
+void Forwarder::Output::rebase(uint32_t ssrc, uint16_t seq, uint32_t ts, Clock::time_point now, uint32_t rate)
 {
-    std::lock_guard lock(m_mutex);
-    m_ingestVideo = track;
+    // Fonte nova (início, transmissor reconectado ou troca de camada): continua
+    // a numeração de saída de onde parou, avançando o relógio RTP pelo tempo
+    // real que passou.
+    if (started) {
+        const uint32_t step = std::max<uint32_t>(1, ticks(now - lastAt, rate));
+        seqOffset = uint16_t(lastSeq + 1 - seq);
+        tsOffset = lastTs + step - ts;
+    }
+    started = true;
+    srcSsrc = ssrc;
+    lastSeq = uint16_t(seq + seqOffset - 1);
+    lastTs = ts + tsOffset;
+    lastAt = now;
 }
 
-void Forwarder::onRtp(Kind kind, const std::byte *data, size_t size)
+void Forwarder::Output::advance(uint16_t outSeq, uint32_t outTs, Clock::time_point now)
+{
+    if (int16_t(outSeq - lastSeq) > 0) {
+        lastSeq = outSeq;
+        lastTs = outTs;
+        lastAt = now;
+    }
+}
+
+// ================================================================= Forwarder
+
+void Forwarder::setIngestVideoTrack(int layer, const std::shared_ptr<rtc::Track> &track)
+{
+    if (layer < 0 || layer >= MaxLayers)
+        return;
+    std::lock_guard lock(m_mutex);
+    m_video[size_t(layer)].ingest = track;
+}
+
+Forwarder::SinkState *Forwarder::findLocked(const EgressSink *sink)
+{
+    for (SinkState &s : m_sinks)
+        if (s.sink.get() == sink)
+            return &s;
+    return nullptr;
+}
+
+const Forwarder::SinkState *Forwarder::findLocked(const EgressSink *sink) const
+{
+    for (const SinkState &s : m_sinks)
+        if (s.sink.get() == sink)
+            return &s;
+    return nullptr;
+}
+
+bool Forwarder::aliveLocked(int layer, Clock::time_point now) const
+{
+    const Source &src = m_video[size_t(layer)];
+    return src.started && now - src.lastAt < LayerTimeout;
+}
+
+int Forwarder::targetLocked(const SinkState &s, Clock::time_point now) const
+{
+    if (aliveLocked(s.wanted, now))
+        return s.wanted;
+    for (int layer = 0; layer < MaxLayers; ++layer)
+        if (layer != s.wanted && aliveLocked(layer, now))
+            return layer;
+    return s.wanted;
+}
+
+void Forwarder::markKeyFrameLocked(int layer) { m_video[size_t(layer)].keyFramePending = true; }
+
+std::vector<std::shared_ptr<rtc::Track>> Forwarder::takeKeyFrameRequestsLocked(Clock::time_point now)
+{
+    std::vector<std::shared_ptr<rtc::Track>> out;
+    for (Source &src : m_video) {
+        if (!src.keyFramePending || now - src.lastKeyFrameRequest < KeyFrameInterval)
+            continue;
+        auto track = src.ingest.lock();
+        if (!track || !track->isOpen())
+            continue;
+        src.keyFramePending = false;
+        src.lastKeyFrameRequest = now;
+        out.push_back(std::move(track));
+    }
+    return out;
+}
+
+void Forwarder::sendPlis(const std::vector<std::shared_ptr<rtc::Track>> &tracks)
+{
+    for (const auto &track : tracks) {
+        try {
+            track->requestKeyframe();
+        } catch (const std::exception &) {
+        }
+    }
+}
+
+void Forwarder::onVideoLocked(int layer, uint32_t ssrc, uint16_t seq, uint32_t ts, bool keyStart, Clock::time_point now,
+                              const rtc::binary &base, std::vector<std::pair<std::shared_ptr<EgressSink>, rtc::binary>> &out)
+{
+    Source &src = m_video[size_t(layer)];
+    if (!src.started || src.ssrc != ssrc) {
+        src.started = true;
+        src.ssrc = ssrc;
+        src.haveSr = false;
+        src.keyFramePending = true; // os espectadores precisam de um IDR da fonte nova
+    }
+    src.lastAt = now;
+
+    for (SinkState &s : m_sinks) {
+        const int target = targetLocked(s, now);
+        if (s.layer == layer && s.out.srcSsrc == ssrc) {
+            // Já nesta camada (mesmo que esperando trocar para outra: até o
+            // keyframe dela, segue nesta). Retransmissões de antes do keyframe
+            // que abriu a camada não fazem sentido para este espectador.
+            if (s.guardLeft > 0) {
+                --s.guardLeft;
+                if (int16_t(seq - s.firstSeq) < 0)
+                    continue;
+            }
+        } else if (target == layer && keyStart) {
+            s.out.rebase(ssrc, seq, ts, now, VideoClockRate);
+            s.layer = layer;
+            s.firstSeq = seq;
+            s.guardLeft = SwitchGuardPackets;
+        } else {
+            if (target == layer)
+                markKeyFrameLocked(layer); // esperando um keyframe desta camada
+            continue;
+        }
+        const uint16_t outSeq = uint16_t(seq + s.out.seqOffset);
+        const uint32_t outTs = ts + s.out.tsOffset;
+        s.out.advance(outSeq, outTs, now);
+        rtc::binary packet = base;
+        put16(packet.data() + 2, outSeq);
+        put32(packet.data() + 4, outTs);
+        out.emplace_back(s.sink, std::move(packet));
+    }
+}
+
+void Forwarder::onRtp(Kind kind, int layer, const std::byte *data, size_t size)
 {
     // Cabeçalho RTP: V=2, CC CSRCs e, se X, uma extensão (perfil + tamanho em palavras).
-    if (size < 12 || (u8(data) >> 6) != 2)
+    if (size < 12 || (u8(data) >> 6) != 2 || layer < 0 || layer >= MaxLayers)
         return;
     const uint8_t b0 = u8(data);
     const size_t header = 12 + 4 * size_t(b0 & 0x0F);
@@ -100,135 +273,174 @@ void Forwarder::onRtp(Kind kind, const std::byte *data, size_t size)
     const uint32_t ssrc = be32(data + 8);
     const auto now = Clock::now();
 
-    uint16_t outSeq = 0;
-    uint32_t outTs = 0;
-    std::vector<std::shared_ptr<EgressSink>> sinks;
-    std::shared_ptr<rtc::Track> pli;
+    // Pacote de saída sem extensão e com o PT fixo; seq/ts entram por espectador.
+    rtc::binary base;
+    base.reserve(header + (size - payloadAt));
+    base.assign(data, data + header);
+    base[0] = std::byte(b0 & ~0x10);
+    base[1] = std::byte((u8(data + 1) & 0x80) | (kind == Kind::Video ? VideoPayloadType : AudioPayloadType));
+    base.insert(base.end(), data + payloadAt, data + size);
+
+    std::vector<std::pair<std::shared_ptr<EgressSink>, rtc::binary>> out;
+    std::vector<std::shared_ptr<rtc::Track>> plis;
     {
         std::lock_guard lock(m_mutex);
-        Lane &l = m_lanes[int(kind)];
-        if (!l.started || ssrc != l.srcSsrc) {
-            // Fonte nova (início ou transmissor reconectado): continua a
-            // numeração de saída de onde parou, avançando o relógio RTP pelo
-            // tempo real que passou.
-            if (l.started) {
-                const uint32_t step = std::max<uint32_t>(1, ticks(now - l.lastAt, clockRate(kind)));
-                l.seqOffset = uint16_t(l.lastSeq + 1 - seq);
-                l.tsOffset = l.lastTs + step - ts;
+        if (kind == Kind::Video) {
+            onVideoLocked(layer, ssrc, seq, ts, isKeyFrameStart(data, size), now, base, out);
+            plis = takeKeyFrameRequestsLocked(now);
+        } else {
+            Output &o = m_audio.out;
+            if (!o.started || ssrc != o.srcSsrc) {
+                o.rebase(ssrc, seq, ts, now, AudioClockRate);
+                m_audio.haveSr = false;
             }
-            l.started = true;
-            l.srcSsrc = ssrc;
-            l.haveSr = false;
-            l.lastSeq = uint16_t(seq + l.seqOffset - 1);
-            l.lastTs = ts + l.tsOffset;
-            l.lastAt = now;
-            if (kind == Kind::Video)
-                m_keyFramePending = true; // os espectadores precisam de um IDR da fonte nova
-        }
-        outSeq = uint16_t(seq + l.seqOffset);
-        outTs = ts + l.tsOffset;
-        if (int16_t(outSeq - l.lastSeq) > 0) { // ignora retransmissões/fora de ordem
-            l.lastSeq = outSeq;
-            l.lastTs = outTs;
-            l.lastAt = now;
-        }
-        if (kind == Kind::Video)
-            pli = takeKeyFrameRequestLocked(now);
-        sinks = m_sinks;
-    }
-    if (pli) {
-        try {
-            pli->requestKeyframe();
-        } catch (const std::exception &) {
+            const uint16_t outSeq = uint16_t(seq + o.seqOffset);
+            const uint32_t outTs = ts + o.tsOffset;
+            o.advance(outSeq, outTs, now);
+            put16(base.data() + 2, outSeq);
+            put32(base.data() + 4, outTs);
+            out.reserve(m_sinks.size());
+            for (const SinkState &s : m_sinks)
+                out.emplace_back(s.sink, base);
         }
     }
-    if (sinks.empty())
-        return;
-
-    rtc::binary out;
-    out.reserve(header + (size - payloadAt));
-    out.assign(data, data + header);
-    out[0] = std::byte(b0 & ~0x10); // sem extensão
-    out[1] = std::byte((u8(data + 1) & 0x80) | (kind == Kind::Video ? VideoPayloadType : AudioPayloadType));
-    put16(out.data() + 2, outSeq);
-    put32(out.data() + 4, outTs);
-    out.insert(out.end(), data + payloadAt, data + size);
-    for (const auto &sink : sinks)
-        sink->send(kind, out);
+    sendPlis(plis);
+    for (auto &[sink, packet] : out)
+        sink->send(kind, std::move(packet));
 }
 
-void Forwarder::onSenderReport(Kind kind, uint32_t ssrc, uint32_t rtpTimestamp)
+void Forwarder::onSenderReport(Kind kind, int layer, uint32_t ssrc, uint32_t rtpTimestamp)
 {
     std::lock_guard lock(m_mutex);
-    Lane &l = m_lanes[int(kind)];
-    if (!l.started || ssrc != l.srcSsrc)
+    if (kind == Kind::Audio) {
+        if (!m_audio.out.started || ssrc != m_audio.out.srcSsrc)
+            return;
+        m_audio.haveSr = true;
+        m_audio.srRtp = rtpTimestamp;
+        m_audio.srAt = Clock::now();
         return;
-    l.haveSr = true;
-    l.srRtp = rtpTimestamp;
-    l.srAt = Clock::now();
+    }
+    if (layer < 0 || layer >= MaxLayers)
+        return;
+    Source &src = m_video[size_t(layer)];
+    if (!src.started || ssrc != src.ssrc)
+        return;
+    src.haveSr = true;
+    src.srRtp = rtpTimestamp;
+    src.srAt = Clock::now();
 }
 
-std::optional<uint32_t> Forwarder::rtpNow(Kind kind) const
+std::optional<uint32_t> Forwarder::rtpNow(Kind kind, const EgressSink *sink) const
 {
     std::lock_guard lock(m_mutex);
-    const Lane &l = m_lanes[int(kind)];
-    if (!l.started)
-        return std::nullopt;
     const auto now = Clock::now();
     // Com SR do transmissor, seguimos a âncora dele (mesma referência para
     // áudio e vídeo); sem SR, o último pacote repassado vale como "agora".
-    if (l.haveSr)
-        return l.srRtp + l.tsOffset + ticks(now - l.srAt, clockRate(kind));
-    return l.lastTs + ticks(now - l.lastAt, clockRate(kind));
+    if (kind == Kind::Audio) {
+        const Output &o = m_audio.out;
+        if (!o.started)
+            return std::nullopt;
+        if (m_audio.haveSr)
+            return m_audio.srRtp + o.tsOffset + ticks(now - m_audio.srAt, AudioClockRate);
+        return o.lastTs + ticks(now - o.lastAt, AudioClockRate);
+    }
+    const SinkState *s = findLocked(sink);
+    if (!s || s->layer < 0 || !s->out.started)
+        return std::nullopt;
+    const Source &src = m_video[size_t(s->layer)];
+    if (src.haveSr && src.ssrc == s->out.srcSsrc)
+        return src.srRtp + s->out.tsOffset + ticks(now - src.srAt, VideoClockRate);
+    return s->out.lastTs + ticks(now - s->out.lastAt, VideoClockRate);
 }
 
 void Forwarder::addSink(const std::shared_ptr<EgressSink> &sink)
 {
     std::lock_guard lock(m_mutex);
-    if (std::find(m_sinks.begin(), m_sinks.end(), sink) == m_sinks.end())
-        m_sinks.push_back(sink);
+    if (findLocked(sink.get()))
+        return;
+    SinkState s;
+    s.sink = sink;
+    m_sinks.push_back(std::move(s));
 }
 
 void Forwarder::removeSink(const std::shared_ptr<EgressSink> &sink)
 {
     std::lock_guard lock(m_mutex);
-    m_sinks.erase(std::remove(m_sinks.begin(), m_sinks.end(), sink), m_sinks.end());
+    m_sinks.erase(std::remove_if(m_sinks.begin(), m_sinks.end(), [&](const SinkState &s) { return s.sink == sink; }),
+                  m_sinks.end());
 }
 
-std::shared_ptr<rtc::Track> Forwarder::takeKeyFrameRequestLocked(Clock::time_point now)
+void Forwarder::setSinkLayer(const EgressSink *sink, int layer)
 {
-    if (!m_keyFramePending || now - m_lastKeyFrameRequest < KeyFrameInterval)
-        return {};
-    auto track = m_ingestVideo.lock();
-    if (!track || !track->isOpen())
-        return {};
-    m_keyFramePending = false;
-    m_lastKeyFrameRequest = now;
-    return track;
+    if (layer < 0 || layer >= MaxLayers)
+        return;
+    std::vector<std::shared_ptr<rtc::Track>> plis;
+    {
+        std::lock_guard lock(m_mutex);
+        SinkState *s = findLocked(sink);
+        if (!s || s->wanted == layer)
+            return;
+        s->wanted = layer;
+        const int target = targetLocked(*s, Clock::now());
+        if (target != s->layer)
+            markKeyFrameLocked(target);
+        plis = takeKeyFrameRequestsLocked(Clock::now());
+    }
+    sendPlis(plis);
+}
+
+int Forwarder::sinkLayer(const EgressSink *sink) const
+{
+    std::lock_guard lock(m_mutex);
+    const SinkState *s = findLocked(sink);
+    return s ? s->layer : -1;
+}
+
+bool Forwarder::hasLayer(int layer) const
+{
+    if (layer < 0 || layer >= MaxLayers)
+        return false;
+    std::lock_guard lock(m_mutex);
+    return aliveLocked(layer, Clock::now());
 }
 
 void Forwarder::requestKeyFrame()
 {
-    std::shared_ptr<rtc::Track> track;
+    std::vector<std::shared_ptr<rtc::Track>> plis;
     {
         std::lock_guard lock(m_mutex);
-        m_keyFramePending = true;
-        track = takeKeyFrameRequestLocked(Clock::now());
+        for (int layer = 0; layer < MaxLayers; ++layer)
+            markKeyFrameLocked(layer);
+        plis = takeKeyFrameRequestsLocked(Clock::now());
     }
-    if (!track)
-        return; // sai com o próximo pacote de vídeo, quando a janela abrir
-    try {
-        track->requestKeyframe();
-    } catch (const std::exception &) {
-    }
+    sendPlis(plis); // os que estão na janela saem com o próximo pacote de vídeo
 }
 
-void Forwarder::requestBitrate(unsigned int bitrate)
+void Forwarder::requestKeyFrame(const EgressSink *sink)
 {
+    std::vector<std::shared_ptr<rtc::Track>> plis;
+    {
+        std::lock_guard lock(m_mutex);
+        const auto now = Clock::now();
+        const SinkState *s = findLocked(sink);
+        if (s)
+            markKeyFrameLocked(targetLocked(*s, now));
+        else
+            for (int layer = 0; layer < MaxLayers; ++layer)
+                markKeyFrameLocked(layer);
+        plis = takeKeyFrameRequestsLocked(now);
+    }
+    sendPlis(plis);
+}
+
+void Forwarder::requestBitrate(int layer, unsigned int bitrate)
+{
+    if (layer < 0 || layer >= MaxLayers)
+        return;
     std::shared_ptr<rtc::Track> track;
     {
         std::lock_guard lock(m_mutex);
-        track = m_ingestVideo.lock();
+        track = m_video[size_t(layer)].ingest.lock();
     }
     if (!track || !track->isOpen())
         return;

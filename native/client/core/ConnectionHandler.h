@@ -125,6 +125,7 @@ public:
     int ownChannel() const;
     bool hasStreamingP2P() const { return m_capabilities.contains(CapStreamP2P); }
     bool hasStreamingSFU() const { return m_capabilities.contains(CapStreamSFU); }
+    bool hasSimulcast() const { return m_capabilities.contains(CapStreamSimulcast); }
     bool hasProfiles() const { return m_capabilities.contains(CapProfiles); }
     bool hasProfileMedia() const { return m_capabilities.contains(CapProfileMedia); }
     /// O último login foi recusado por falta da senha do perfil (ou senha errada).
