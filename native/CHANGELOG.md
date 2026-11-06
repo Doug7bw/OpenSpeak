@@ -1,3 +1,13 @@
+# OpenSpeak 1.0.35 — qualidade por espectador
+
+- **Simulcast no servidor:** quem transmite pelo app manda também uma versão
+  mais leve do vídeo (até 480p), e cada espectador recebe a que a conexão dele
+  aguenta. Uma pessoa com internet ruim não derruba mais a qualidade de todos.
+- **Escolha de qualidade:** quem assiste pode deixar em **Automática** ou
+  forçar **Alta** ou **Baixa**, pelo novo botão no vídeo (no app e no site).
+- Quando a captura de janela fica preta, o app agora **pergunta** se você quer
+  usar a captura alternativa (com a borda amarela), em vez de trocar sozinho.
+
 # OpenSpeak 1.0.34 — versão mobile para assistir
 
 - **Versão mobile do site:** no celular e no tablet, o site mostra quem está ao vivo
