@@ -1,3 +1,8 @@
+# OpenSpeak 1.0.37 — botão de qualidade
+
+- O **botão de qualidade** agora aparece de verdade no vídeo de quem você está
+  assistindo (a 1.0.35 e a 1.0.36 não o mostravam).
+
 # OpenSpeak 1.0.36 — tudo pelo servidor
 
 - **Transmissões só pelo servidor:** o modo P2P foi desativado e saiu da
