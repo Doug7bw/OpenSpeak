@@ -321,6 +321,7 @@ struct WindowGrabber::Impl {
     QVideoFrame lastFrame;
     Method lastMethod = Method::None;
     int blackStreak = 0;
+    bool blackReported = false; // já avisou deste trecho preto (volta a avisar depois de um quadro bom)
     bool closed = false;
     bool occluded = false;
     ULONGLONG occlusionCheckedAt = 0;
@@ -587,16 +588,17 @@ void WindowGrabber::tick()
         return;
 
     // C) preto nos dois modos por ~3 s: PW_RENDERFULLCONTENT não funciona para esta janela.
+    // Só avisa (uma vez por trecho preto) e segue capturando: quem decide trocar para o
+    // Windows.Graphics.Capture é o VideoSource (na transmissão, pergunta antes).
     if (method == Impl::Method::PrintWindow && d.outIsBlack()) {
-        if (++d.blackStreak >= kBlackFallbackSeconds * m_fps) {
-            d.closed = true;
-            m_timer->stop();
-            qInfo() << "WindowGrabber: duplicação e PrintWindow só devolvem preto há 3 s; voltando para o Windows.Graphics.Capture";
+        if (++d.blackStreak >= kBlackFallbackSeconds * m_fps && !d.blackReported) {
+            d.blackReported = true;
+            qInfo() << "WindowGrabber: duplicação e PrintWindow só devolvem preto há 3 s";
             emit fallbackRequested();
-            return;
         }
     } else {
         d.blackStreak = 0;
+        d.blackReported = false;
     }
 
     if (method != d.lastMethod) {

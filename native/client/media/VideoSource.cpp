@@ -196,9 +196,14 @@ bool VideoSource::open(const SourceDescriptor &desc, int targetFps)
                 emit errorOccurred(QStringLiteral("window_closed"));
                 emit ended();
             });
-            connect(m_grabber.get(), &WindowGrabber::fallbackRequested, this, [this, window] {
-                m_grabber.reset();
-                startWindowCapture(window);
+            m_fallbackWindow = window;
+            connect(m_grabber.get(), &WindowGrabber::fallbackRequested, this, [this] {
+                if (!m_askBeforeFallback) {
+                    useAlternativeCapture();
+                } else if (!m_fallbackDeclined && !m_fallbackPending) {
+                    m_fallbackPending = true;
+                    emit alternativeCaptureSuggested();
+                }
             });
             m_grabber->start();
         } else {
@@ -235,10 +240,29 @@ bool VideoSource::open(const SourceDescriptor &desc, int targetFps)
     return true;
 }
 
+bool VideoSource::useAlternativeCapture()
+{
+    m_fallbackPending = false;
+    if (!m_active || !m_grabber || m_desc.type != StreamType::Window || m_window)
+        return false;
+    qInfo() << "VideoSource: trocando para o Windows.Graphics.Capture";
+    m_grabber.reset();
+    startWindowCapture(m_fallbackWindow);
+    return true;
+}
+
+void VideoSource::declineAlternativeCapture()
+{
+    m_fallbackPending = false;
+    m_fallbackDeclined = true;
+}
+
 void VideoSource::close()
 {
     m_testTimer.stop();
     m_grabber.reset();
+    m_fallbackPending = false;
+    m_fallbackDeclined = false;
     if (m_screen)
         m_screen->stop();
     if (m_window)

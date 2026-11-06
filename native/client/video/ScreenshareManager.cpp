@@ -328,6 +328,7 @@ void ScreenshareManager::startMedia(OwnStream &own)
     connect(own.source.get(), &VideoSource::frameAvailable, this, [p](const QVideoFrame &f) { p->pushFrame(f); });
     const QString id = own.id;
     connect(own.source.get(), &VideoSource::ended, this, [this, id] { stopStream(id); });
+    watchCaptureFallback(own);
 
     // Áudio do stream (sistema / processo da janela / microfone).
     if (!own.config.audio)
@@ -473,6 +474,8 @@ void ScreenshareManager::changeSource(const QString &id)
     m_preview->clearPreviewSinks(); // picker sinks should not survive the dialog
     own.source->transferPreviewSinksTo(*m_preview); // local tile and fullscreen
     own.source->disconnect(this);
+    if (own.source->alternativeCapturePending())
+        emit captureFallbackResolved(id);
     own.source->close();
     own.source = std::move(m_preview);
     emit previewChanged();
@@ -484,6 +487,7 @@ void ScreenshareManager::changeSource(const QString &id)
         own.encoderLow->requestKeyFrame();
     connect(own.source.get(), &VideoSource::frameAvailable, this, [p](const QVideoFrame &f) { p->pushFrame(f); });
     connect(own.source.get(), &VideoSource::ended, this, [this, id] { stopStream(id); });
+    watchCaptureFallback(own);
     startAudioFor(own); // o áudio acompanha a nova fonte
     m_conn->sendCommand(QStringLiteral("updatestream"), {{"streamIdentifier", id}, {"type", int(own.config.type)}, {"app", own.config.app}});
     notifyChanged();
@@ -557,6 +561,33 @@ void ScreenshareManager::keepOwnPreview(const QString &id)
     it->second->previewClosed = false;
     it->second->previewKept = true;
     notifyChanged();
+}
+
+void ScreenshareManager::watchCaptureFallback(OwnStream &own)
+{
+    // Na transmissão, a troca para a captura com borda amarela é decisão de quem transmite.
+    own.source->setAskBeforeFallback(true);
+    const QString id = own.id;
+    connect(own.source.get(), &VideoSource::alternativeCaptureSuggested, this, [this, id] {
+        auto it = m_own.find(id);
+        if (it != m_own.end())
+            emit captureFallbackSuggested(id, it->second->source->label());
+    });
+}
+
+void ScreenshareManager::respondAlternativeCapture(const QString &id, bool use)
+{
+    auto it = m_own.find(id);
+    if (it == m_own.end())
+        return;
+    OwnStream &own = *it->second;
+    if (!use) {
+        own.source->declineAlternativeCapture();
+    } else if (own.source->useAlternativeCapture()) {
+        own.encoder->requestKeyFrame();
+        notifyChanged();
+    }
+    emit captureFallbackResolved(id);
 }
 
 void ScreenshareManager::closeOwnPreview(const QString &id)
@@ -1097,6 +1128,8 @@ void ScreenshareManager::disposeOwn(const QString &id)
     if (own.encoderLow)
         own.encoderLow->stop();
     own.source->disconnect(this);
+    if (own.source->alternativeCapturePending())
+        emit captureFallbackResolved(id);
     own.source->close();
     for (int clid : own.sessions.keys())
         removeSession(own, clid);
