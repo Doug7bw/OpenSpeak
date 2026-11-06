@@ -71,6 +71,9 @@ public:
     Q_INVOKABLE void keepOwnPreview(const QString &id);
     /// Fecha a prévia à mão; com um app em tela cheia ela volta a fechar sozinha.
     Q_INVOKABLE void closeOwnPreview(const QString &id);
+    /// Resposta à pergunta de captureFallbackSuggested: true troca para a captura
+    /// alternativa (Windows.Graphics.Capture, com a borda amarela).
+    Q_INVOKABLE void respondAlternativeCapture(const QString &id, bool use);
     Q_INVOKABLE void respondJoinRequest(const QString &id, int clid, bool accept, bool ban = false);
     Q_INVOKABLE void removeViewer(const QString &id, int clid, bool ban = false);
     Q_INVOKABLE void unban(const QString &id, const QString &uid);
@@ -99,6 +102,9 @@ signals:
     void statsChanged(const QString &id);
     void joinRequest(const QString &id, int clid, const QString &nickname);
     void joinRequestResolved(const QString &id, int clid);
+    /// A janela transmitida está preta há ~3 s: pergunta se usa a captura alternativa.
+    void captureFallbackSuggested(const QString &id, const QString &label);
+    void captureFallbackResolved(const QString &id);
     void errorOccurred(const QString &message);
     /// Aviso informativo; `key` é uma chave do I18n.
     void noticeOccurred(const QString &key);
@@ -174,6 +180,7 @@ private:
     void onSignaling(const QJsonObject &a);
     void startMedia(OwnStream &own);
     void startAudioFor(OwnStream &own);
+    void watchCaptureFallback(OwnStream &own);
     void configureEncoder(OwnStream &own);
     void scheduleThumbnails(OwnStream &own);
     void removeSession(OwnStream &own, int clid);

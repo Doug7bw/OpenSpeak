@@ -326,5 +326,23 @@ ApplicationWindow {
             })
         }
         function onJoinRequestResolved(id, clid) { toasts.dismiss("join:" + id + ":" + clid) }
+        function onCaptureFallbackSuggested(id, label) {
+            if (!window.visible || window.visibility === Window.Minimized || !window.active)
+                Tray.showMessage(I18n.t("video.capture.fallback.title"), I18n.t("video.capture.fallback.text", { window: label }))
+            toasts.show({
+                key: "capture:" + id,
+                kind: "request",
+                icon: "warning",
+                timeout: 0,
+                text: I18n.t("video.capture.fallback.text", { window: label }),
+                actions: [
+                    { label: I18n.t("video.capture.fallback.use"), primary: true,
+                      run: function() { Screenshare.respondAlternativeCapture(id, true) } },
+                    { label: I18n.t("video.capture.fallback.keep"),
+                      run: function() { Screenshare.respondAlternativeCapture(id, false) } }
+                ]
+            })
+        }
+        function onCaptureFallbackResolved(id) { toasts.dismiss("capture:" + id) }
     }
 }
