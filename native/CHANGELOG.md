@@ -1,3 +1,13 @@
+# OpenSpeak 1.0.36 — tudo pelo servidor
+
+- **Transmissões só pelo servidor:** o modo P2P foi desativado e saiu da
+  interface. Toda transmissão agora passa pelo servidor (SFU), sem expor o seu
+  IP aos espectadores e sem o seu upload crescer a cada pessoa assistindo.
+- O **botão de qualidade** agora aparece em toda transmissão. Quando ela tem uma
+  qualidade só (feita pelo site, por versão antiga do app ou abaixo de 540p /
+  1,2 Mbps), o menu avisa em vez de o botão sumir.
+- Versões antigas do app precisam ser atualizadas para transmitir.
+
 # OpenSpeak 1.0.35 — qualidade por espectador
 
 - **Simulcast no servidor:** quem transmite pelo app manda também uma versão
