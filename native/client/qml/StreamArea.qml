@@ -51,7 +51,9 @@ Rectangle {
     readonly property var roleDefaults: ({
         kind: "", name: "", type: 0, access: 0, viewerCount: 0, paused: false, thumbnail: "", ownerName: "",
         status: "", errorKey: "", severity: 0, pendingRequests: 0, volume: 1.0, hasVideo: false, ownerClid: 0,
-        previewClosed: false
+        previewClosed: false, audioBlocked: false,
+        // qualidade (simulcast no SFU)
+        sfu: false, simulcast: false, layer: "high", qualityPreference: "auto"
     })
 
     function sync() {
