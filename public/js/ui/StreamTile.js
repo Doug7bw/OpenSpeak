@@ -342,7 +342,6 @@ export class StreamTile {
       return h('select.quality-select', { disabled: true, title: t('video.quality.single.hint'), 'aria-label': t('video.quality') },
         h('option', t('video.quality.single')));
     }
-    const layer = t(view.layer === 'low' ? 'video.quality.low' : 'video.quality.high');
     const option = (value, label) => h('option', { value, selected: view.qualityPreference === value }, label);
     return h('select.quality-select', {
       class: view.layer === 'low' ? 'low' : '',
@@ -352,7 +351,7 @@ export class StreamTile {
         change: ev => this.actions.setQuality(id, ev.target.value),
       },
     },
-    option('auto', t('video.quality.auto_current', { layer })),
+    option('auto', t('video.quality.auto')),
     option('high', t('video.quality.high')),
     option('low', t('video.quality.low')));
   }

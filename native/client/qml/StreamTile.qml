@@ -41,9 +41,7 @@ Rectangle {
     readonly property bool hasQuality: !own && !!data_.sfu
     readonly property bool simulcast: !own && !!data_.simulcast
     readonly property string qualityPreference: data_.qualityPreference || "auto"
-    readonly property string currentLayerText: data_.layer === "low" ? I18n.t("video.quality.low") : I18n.t("video.quality.high")
-    readonly property string qualityAutoText: simulcast ? I18n.t("video.quality.auto_current", { layer: currentLayerText })
-                                                        : I18n.t("video.quality.auto")
+    readonly property string qualityAutoText: I18n.t("video.quality.auto")
     readonly property string qualityTip: !simulcast ? I18n.t("video.quality") + ": " + I18n.t("video.quality.single")
         : I18n.t("video.quality") + ": "
         + (qualityPreference === "high" ? I18n.t("video.quality.high")

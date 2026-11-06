@@ -57,7 +57,6 @@ const STRINGS = {
   'video.action.volume': 'Volume',
   'video.quality': 'Qualidade',
   'video.quality.auto': 'Automática',
-  'video.quality.auto_current': 'Automática ({layer})',
   'video.quality.high': 'Alta',
   'video.quality.low': 'Baixa',
   'video.quality.single': 'uma qualidade só',

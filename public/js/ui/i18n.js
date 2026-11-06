@@ -97,7 +97,6 @@ const STRINGS = {
   'video.action.stats': 'Estatísticas',
   'video.quality': 'Qualidade',
   'video.quality.auto': 'Automática',
-  'video.quality.auto_current': 'Automática ({layer})',
   'video.quality.high': 'Alta',
   'video.quality.low': 'Baixa',
   'video.quality.single': 'Uma qualidade',
