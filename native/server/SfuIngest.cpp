@@ -2,7 +2,11 @@
 #include "RtpRecovery.h"
 #include "SdpFilter.h"
 
+#include <QLoggingCategory>
+
 #include <atomic>
+
+Q_DECLARE_LOGGING_CATEGORY(lcSfu)
 
 namespace openspeak {
 QJsonObject SfuIngest::mediaSnapshot() const
@@ -128,6 +132,8 @@ void SfuIngest::onRemoteTrack(std::shared_ptr<rtc::Track> track)
         return;
     // Simulcast do transmissor nativo: a camada baixa vem numa m-line própria.
     const int layer = kind == sfu::Kind::Video && desc.mid() == sfu::LowLayerMid ? sfu::LowLayer : sfu::HighLayer;
+    qCInfo(lcSfu).noquote() << streamId() << "track do transmissor:" << QString::fromStdString(desc.type())
+                            << "mid" << QString::fromStdString(desc.mid()) << "camada" << layer;
 
     // A entrada percorre a cadeia do fim para o início:
     // recuperação (NACK) -> Tap -> sessão RTCP -> Drain.

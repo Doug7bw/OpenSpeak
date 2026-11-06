@@ -482,17 +482,19 @@ private slots:
         server->setRelay(&relay);
         const int host = server->connect();
         const QJsonObject view = server->handle(host, "login", {{"nickname", "host"}, {"uid", "uid-host"}});
-        QCOMPARE(view.value("server").toObject().value("capabilityExtensions").toArray(), (QJsonArray{CapStreamP2P, CapProfiles, CapProfileMedia, CapStreamSFU, CapStreamSimulcast}));
+        QCOMPARE(view.value("server").toObject().value("capabilityExtensions").toArray(), (QJsonArray{CapProfiles, CapProfileMedia, CapStreamSFU, CapStreamSimulcast}));
 
         const QString sid = setup(host, {{"mode", int(StreamMode::SFU)}, {"bitrate", 2'000'000}});
         QCOMPARE(relay.calls, QStringList{QStringLiteral("open %1 %2 2000000").arg(sid).arg(host)});
         server->handle(host, "updatestream", {{"streamIdentifier", sid}, {"bitrate", 1'000'000}});
         QCOMPARE(relay.calls.last(), QStringLiteral("update %1 1000000").arg(sid));
 
-        // P2P continua disponível e não toca no relay.
+        // Com relay o P2P está desativado; sem modo, a transmissão vai pelo servidor.
         relay.calls.clear();
-        setup(host);
+        QCOMPARE(expectError(host, "setupstream", {{"mode", int(StreamMode::P2P)}}), rc::ModeNotSupported);
         QVERIFY(relay.calls.isEmpty());
+        const QString byDefault = setup(host);
+        QCOMPARE(relay.calls, QStringList{QStringLiteral("open %1 %2 3000000").arg(byDefault).arg(host)});
     }
 
     void sfuJoinUsesRelayPeer()
@@ -501,7 +503,6 @@ private slots:
         server->setRelay(&relay);
         const int host = login("host"), viewer = login("viewer");
         const QString sid = setup(host, {{"mode", int(StreamMode::SFU)}, {"access", int(StreamAccess::Private)}});
-        const QString p2p = setup(host);
         relay.calls.clear();
 
         server->handle(viewer, "joinstreamrequest", {{"streamIdentifier", sid}});
@@ -513,11 +514,6 @@ private slots:
         // O dono continua sabendo quem assiste (lista de espectadores).
         QCOMPARE(notes(host, "notifystreamclientjoined")[0].value("clid").toInt(), viewer);
         QCOMPARE(relay.calls, QStringList{QStringLiteral("add %1 %2").arg(sid).arg(viewer)});
-
-        // P2P: peerClid = dono.
-        server->handle(viewer, "joinstreamrequest", {{"streamIdentifier", p2p}});
-        server->handle(host, "respondjoinstreamrequest", {{"streamIdentifier", p2p}, {"clid", viewer}, {"accept", true}});
-        QCOMPARE(notes(viewer, "notifyrespondjoinstreamrequest")[1].value("peerClid").toInt(), host);
     }
 
     void sfuWebSocketViewer()
@@ -526,11 +522,7 @@ private slots:
         server->setRelay(&relay);
         const int host = login("host"), viewer = login("viewer"), other = login("other");
         const QString sid = setup(host, {{"mode", int(StreamMode::SFU)}});
-        const QString p2p = setup(host);
         relay.calls.clear();
-
-        // Sem WebRTC só dá para assistir pelo relay.
-        QCOMPARE(expectError(viewer, "joinstreamrequest", {{"streamIdentifier", p2p}, {"transport", "websocket"}}), rc::ModeNotSupported);
 
         server->handle(viewer, "joinstreamrequest", {{"streamIdentifier", sid}, {"transport", "websocket"}});
         server->handle(host, "respondjoinstreamrequest", {{"streamIdentifier", sid}, {"clid", viewer}, {"accept", true}});
@@ -588,11 +580,6 @@ private slots:
         QCOMPARE(toViewer[0].value("payload").toObject().value("type").toString(), QStringLiteral("offer"));
         QCOMPARE(notes(host, "notifystreamsignaling").size(), 1);
         QVERIFY(notes(stranger, "notifystreamsignaling").isEmpty());
-
-        // Em stream P2P o clid 0 não existe.
-        const QString p2p = setup(host);
-        QCOMPARE(expectError(host, "streamsignaling", {{"streamIdentifier", p2p}, {"clid", RelayClid}, {"payload", offer}}),
-                 rc::PermissionDenied);
     }
 
     void sfuLifecycleNotifiesRelay()

@@ -242,7 +242,7 @@ Rectangle {
                 Label { Layout.alignment: Qt.AlignHCenter; text: I18n.t("video.stream.empty.hint"); color: Theme.textDim }
                 Button {
                     Layout.alignment: Qt.AlignHCenter
-                    visible: Server.hasStreamingP2P
+                    visible: Server.hasStreamingSFU || Server.hasStreamingP2P
                     text: I18n.t("video.action.start_stream")
                     highlighted: true
                     palette.accent: Theme.live
@@ -285,7 +285,7 @@ Rectangle {
                 spacing: 8
 
                 Button {
-                    visible: Server.hasStreamingP2P
+                    visible: Server.hasStreamingSFU || Server.hasStreamingP2P
                     text: I18n.t("video.action.start_stream")
                     highlighted: true
                     palette.accent: Theme.live

@@ -208,12 +208,16 @@ QJsonArray SfuRelay::monitoringSessions()
     QJsonArray sessions;
     for (auto &[id, s] : m_streams) {
         auto ingest = s.ingest->mediaSnapshot();
+        ingest["layers"] = QJsonArray{s.forwarder->hasLayer(sfu::HighLayer), s.forwarder->hasLayer(sfu::LowLayer)};
         ingest["streamId"] = id;
         ingest["clid"] = s.ownerClid;
         ingest["role"] = "publisher";
         sessions.append(ingest);
         for (auto &[clid, egress] : s.viewers) {
             auto viewer = egress->mediaSnapshot();
+            viewer["layer"] = s.forwarder->sinkLayer(egress->sink());
+            if (const auto l = s.layers.find(clid); l != s.layers.end())
+                viewer["layerPreference"] = sfu::layerPreferenceName(l->second.policy.preference);
             viewer["streamId"] = id;
             viewer["clid"] = clid;
             viewer["role"] = "viewer";
@@ -242,6 +246,11 @@ void SfuRelay::adjust(Stream &s, bool collect)
     // Simulcast só com as duas camadas chegando; sem ele, uma qualidade para
     // todos: o transmissor segue o espectador mais limitado (com piso).
     const bool simulcast = s.forwarder->hasLayer(sfu::HighLayer) && s.forwarder->hasLayer(sfu::LowLayer);
+    if (simulcast != s.simulcast) {
+        s.simulcast = simulcast;
+        qCInfo(lcSfu) << "stream" << s.id << (simulcast ? "simulcast ativo (2 camadas)" : "uma camada só")
+                      << "alta" << s.forwarder->hasLayer(sfu::HighLayer) << "baixa" << s.forwarder->hasLayer(sfu::LowLayer);
+    }
     int high = s.bitrate, low = s.bitrate;
     bool anyHigh = false;
     for (auto &[clid, egress] : s.viewers) {

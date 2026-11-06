@@ -36,12 +36,16 @@ Rectangle {
     // 1 = 100%; com "volume até 500%" ligado nas preferências, vai a 5.
     readonly property real maxVolume: Settings.volumeBoost ? 5 : 1
     // Simulcast (SFU): escolha entre a camada alta, a baixa ou o automático.
-    readonly property bool hasQuality: !own && !!data_.simulcast
+    // O botão aparece em toda transmissão pelo servidor; sem as duas camadas, o
+    // menu explica que só há uma qualidade.
+    readonly property bool hasQuality: !own && !!data_.sfu
+    readonly property bool simulcast: !own && !!data_.simulcast
     readonly property string qualityPreference: data_.qualityPreference || "auto"
     readonly property string currentLayerText: data_.layer === "low" ? I18n.t("video.quality.low") : I18n.t("video.quality.high")
-    readonly property string qualityAutoText: hasQuality ? I18n.t("video.quality.auto_current", { layer: currentLayerText })
-                                                         : I18n.t("video.quality.auto")
-    readonly property string qualityTip: I18n.t("video.quality") + ": "
+    readonly property string qualityAutoText: simulcast ? I18n.t("video.quality.auto_current", { layer: currentLayerText })
+                                                        : I18n.t("video.quality.auto")
+    readonly property string qualityTip: !simulcast ? I18n.t("video.quality") + ": " + I18n.t("video.quality.single")
+        : I18n.t("video.quality") + ": "
         + (qualityPreference === "high" ? I18n.t("video.quality.high")
            : qualityPreference === "low" ? I18n.t("video.quality.low") : qualityAutoText)
 
@@ -340,7 +344,7 @@ Rectangle {
                     id: fullscreenQuality
                     visible: tile.hasQuality
                     iconName: "quality"
-                    iconColor: tile.data_.layer === "low" ? Theme.warn : "white"
+                    iconColor: !tile.simulcast ? Qt.rgba(1, 1, 1, 0.55) : tile.data_.layer === "low" ? Theme.warn : "white"
                     tip: tile.qualityTip
                     onClicked: fullscreenQualityMenu.open()
                     QualityMenu { id: fullscreenQualityMenu }
@@ -771,18 +775,27 @@ Rectangle {
     component QualityMenu: Menu {
         y: -implicitHeight
         MenuItem {
+            visible: !tile.simulcast
+            height: visible ? implicitHeight : 0
+            enabled: false
+            text: I18n.t("video.quality.single.hint")
+        }
+        MenuItem {
+            enabled: tile.simulcast
             text: tile.qualityAutoText
             checkable: true
             checked: tile.qualityPreference === "auto"
             onTriggered: Screenshare.setQualityPreference(tile.streamId, "auto")
         }
         MenuItem {
+            enabled: tile.simulcast
             text: I18n.t("video.quality.high")
             checkable: true
             checked: tile.qualityPreference === "high"
             onTriggered: Screenshare.setQualityPreference(tile.streamId, "high")
         }
         MenuItem {
+            enabled: tile.simulcast
             text: I18n.t("video.quality.low")
             checkable: true
             checked: tile.qualityPreference === "low"
@@ -881,7 +894,7 @@ Rectangle {
                 objectName: "qualityButton"
                 visible: tile.hasQuality && tile.playing
                 iconName: "quality"
-                iconColor: tile.data_.layer === "low" ? Theme.warn : "white"
+                iconColor: !tile.simulcast ? Qt.rgba(1, 1, 1, 0.55) : tile.data_.layer === "low" ? Theme.warn : "white"
                 tip: tile.qualityTip
                 onClicked: qualityMenu.open()
                 QualityMenu { id: qualityMenu }

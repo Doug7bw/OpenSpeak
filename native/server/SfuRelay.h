@@ -76,6 +76,7 @@ private:
         std::map<int, SfuEgress *> viewers;
         std::map<int, SfuWsViewer *> wsViewers; // fora do controle de banda (sem RR/REMB)
         std::map<int, ViewerLayer> layers;        // por espectador (WebRTC ou WebSocket)
+        bool simulcast = false;                   // as duas camadas chegando (último ajuste)
     };
 
     template <typename Session> void wire(Session *session, const QString &streamId, int clid);

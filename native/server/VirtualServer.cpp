@@ -323,7 +323,12 @@ QJsonObject VirtualServer::cmdHeartbeat(Client &, const QJsonObject &) { return 
 QJsonObject VirtualServer::view(const Client &client) const
 {
     QJsonArray channels, clients, streams;
-    QJsonArray caps{CapStreamP2P, CapProfiles, CapProfileMedia};
+    // P2P só sem relay: com o relay, as transmissões vão todas pelo servidor.
+    QJsonArray caps;
+    if (!m_relay)
+        caps.append(CapStreamP2P);
+    caps.append(CapProfiles);
+    caps.append(CapProfileMedia);
     if (m_relay) {
         caps.append(CapStreamSFU);
         caps.append(CapStreamSimulcast);
@@ -461,9 +466,13 @@ QJsonObject VirtualServer::cmdProfileMedia(Client &, const QJsonObject &args)
 
 QJsonObject VirtualServer::cmdSetupStream(Client &client, const QJsonObject &args)
 {
-    const int mode = args.contains("mode") ? args.value("mode").toInt() : int(StreamMode::P2P);
+    // Com relay de mídia, toda transmissão vai pelo servidor (SFU): o P2P está
+    // desativado. Sem relay, P2P é o único modo.
+    const int mode = args.contains("mode") ? args.value("mode").toInt() : int(m_relay ? StreamMode::SFU : StreamMode::P2P);
     if (mode == int(StreamMode::SFU) && !m_relay)
         fail(rc::ModeNotSupported, QStringLiteral("o servidor não tem relay de mídia (STREAM_SFU)"));
+    if (mode == int(StreamMode::P2P) && m_relay)
+        fail(rc::ModeNotSupported, QStringLiteral("transmissão P2P desativada neste servidor: atualize o OpenSpeak"));
     if (mode != int(StreamMode::P2P) && mode != int(StreamMode::SFU))
         fail(rc::ModeNotSupported);
     const auto owned = std::count_if(m_streams.begin(), m_streams.end(),

@@ -26,9 +26,7 @@ export class ChannelTree {
     const ownCid = hd.ownClient?.cid;
     replaceChildren(this.el,
       h('div.tree-server', icon('server'), h('span.ellipsis', hd.serverName),
-        hd.hasStreamingSFU || hd.hasStreamingP2P
-          ? h('span.tag', { title: t(hd.hasStreamingSFU ? 'app.server.mode.sfu' : 'app.server.mode.p2p') }, hd.hasStreamingSFU ? 'SFU' : 'P2P')
-          : null),
+        hd.hasStreamingSFU ? h('span.tag', { title: t('app.server.mode.sfu') }, 'SFU') : null),
       channels.map(ch => {
         const clients = [...hd.clients.values()].filter(c => c.cid === ch.cid).sort((a, b) => hd.clientName(a.clid).localeCompare(hd.clientName(b.clid)));
         const streams = hd.streamsInChannel(ch.cid);

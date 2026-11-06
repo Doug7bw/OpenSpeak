@@ -97,12 +97,13 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(a.isConnected() && b.isConnected() && c.isConnected(), 5000);
         QTRY_VERIFY_WITH_TIMEOUT(a.serverPingMs() >= 0 && b.serverPingMs() >= 0 && c.serverPingMs() >= 0, 5000);
         QTRY_VERIFY_WITH_TIMEOUT(a.client(b.ownClid()) && a.client(b.ownClid())->pingMs >= 0, 5000);
-        QVERIFY(a.hasStreamingP2P());
+        QVERIFY(!a.hasStreamingP2P()); // com relay o P2P está desativado
         QVERIFY(a.hasStreamingSFU());
 
         // Transmissor: padrão de teste 1280x720, público (aceite automático), modo SFU.
         QVERIFY(ma.openPreview({{"type", 2}, {"id", "test"}, {"test", true}}, 30));
-        ma.startStream({{"name", "SFU"}, {"access", 1}, {"mode", 2}, {"audio", false}, {"bitrate", 2'000'000},
+        // Pede P2P de propósito: com relay o app transmite pelo servidor mesmo assim.
+        ma.startStream({{"name", "SFU"}, {"access", 1}, {"mode", 1}, {"audio", false}, {"bitrate", 2'000'000},
                         {"width", 1280}, {"height", 720}, {"fps", 30}});
         QTRY_COMPARE_WITH_TIMEOUT(b.streams().size(), 1, 5000);
         const QString id = b.streams().firstKey();
@@ -166,6 +167,7 @@ private slots:
 
         // Simulcast: os dois começam na camada alta. C escolhe a baixa e passa a
         // receber 480p; B continua em 720p. De volta ao automático, C volta à alta.
+        QVERIFY(item(mc, id).value("sfu").toBool()); // o botão de qualidade aparece
         QTRY_VERIFY_WITH_TIMEOUT(item(mc, id).value("simulcast").toBool(), 5000);
         QCOMPARE(item(mc, id).value("layer").toString(), QStringLiteral("high"));
         mc.setQualityPreference(id, QStringLiteral("low"));
@@ -194,6 +196,49 @@ private slots:
         ma.stopStream(id);
         QTRY_VERIFY_WITH_TIMEOUT(b.streams().isEmpty() && c.streams().isEmpty(), 3000);
         QTRY_VERIFY_WITH_TIMEOUT(mb.items().isEmpty(), 3000);
+    }
+
+    /// Simulcast contra um servidor de verdade (OPENSPEAK_E2E_URL, ex.:
+    /// wss://host/ws, sem senha): mesma checagem do teste local, mas com a mídia
+    /// passando pela internet. Pulado sem a variável.
+    void remoteSimulcast()
+    {
+        const QString url = qEnvironmentVariable("OPENSPEAK_E2E_URL");
+        if (url.isEmpty())
+            QSKIP("OPENSPEAK_E2E_URL não definido");
+        Settings settingsA(QStringLiteral("remote-host"), true), settingsB(QStringLiteral("remote-viewer"), true);
+        for (Settings *s : {&settingsA, &settingsB}) {
+            s->setShowInactiveStreams(true);
+            s->setHiddenStreams({});
+        }
+        ConnectionHandler a, b;
+        ScreenshareManager ma(&a, &settingsA), mb(&b, &settingsB);
+        a.connectTo(url, QStringLiteral("E2E-Host"), settingsA.uid());
+        b.connectTo(url, QStringLiteral("E2E-Viewer"), settingsB.uid());
+        QTRY_VERIFY_WITH_TIMEOUT(a.isConnected() && b.isConnected(), 10000);
+        QVERIFY(a.hasStreamingSFU());
+        QVERIFY(a.hasSimulcast());
+
+        QVERIFY(ma.openPreview({{"type", 2}, {"id", "test"}, {"test", true}}, 30));
+        ma.startStream({{"name", "E2E"}, {"access", 1}, {"mode", 2}, {"audio", false}, {"bitrate", 2'000'000},
+                        {"width", 1280}, {"height", 720}, {"fps", 30}});
+        QTRY_COMPARE_WITH_TIMEOUT(b.streams().size(), 1, 10000);
+        const QString id = b.streams().firstKey();
+        QVideoSink sink;
+        int frames = 0;
+        QSize size;
+        connect(&sink, &QVideoSink::videoFrameChanged, this, [&](const QVideoFrame &f) { frames++; size = f.size(); });
+        mb.joinStream(id);
+        QTRY_VERIFY_WITH_TIMEOUT(item(mb, id).value("status").toString() != QLatin1String("waiting"), 10000);
+        mb.attachVideo(id, &sink);
+        QTRY_VERIFY_WITH_TIMEOUT(frames >= 15, 30000);
+        qInfo() << "remoto: recebendo" << size;
+        QTRY_VERIFY_WITH_TIMEOUT(item(mb, id).value("simulcast").toBool(), 10000);
+        mb.setQualityPreference(id, QStringLiteral("low"));
+        QTRY_COMPARE_WITH_TIMEOUT(item(mb, id).value("layer").toString(), QStringLiteral("low"), 10000);
+        QTRY_COMPARE_WITH_TIMEOUT(size.height(), 480, 15000);
+        ma.stopStream(id);
+        QTRY_VERIFY_WITH_TIMEOUT(b.streams().isEmpty(), 5000);
     }
 
     void sfuUnavailableFallsBack()

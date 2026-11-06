@@ -55,7 +55,7 @@ export class SetupStreamDialog {
     this.config = base.config;
     this.quality = base.quality;
     if (!this.config.name) this.config.name = `Stream de ${own ? handler.clientName(own.clid) : ''}`.trim();
-    if (!handler.hasStreamingSFU) this.config.mode = StreamMode.P2P;
+    this.config.mode = handler.hasStreamingSFU ? StreamMode.SFU : StreamMode.P2P; // não é escolhido na interface
     this.sourceTab = this.config.type === StreamType.CAMERA ? 'camera' : this.config.type === StreamType.WINDOW ? 'window' : 'screen';
     this.preview = null; // SharedVideoSource ainda não publicada
     this.cameras = [];
@@ -226,14 +226,6 @@ export class SetupStreamDialog {
       [StreamAccess.CONTACTS_ONLY]: 'video.privacy.contacts.info',
       [StreamAccess.PRIVATE]: 'video.privacy.private.info',
     }[c.access];
-    const modeOptions = [
-      { key: StreamMode.P2P, title: t('video.mode.p2p'), icon: 'users', tooltip: t('video.mode.p2p.info'), disabled: !!this.edit },
-      {
-        key: StreamMode.SFU, title: t('video.mode.server'), icon: 'server',
-        tooltip: this.handler.hasStreamingSFU ? t('video.mode.server.info') : t('video.mode.server.unsupported'),
-        disabled: !this.handler.hasStreamingSFU || !!this.edit,
-      },
-    ];
     const resolutionId = RESOLUTIONS.find(r => r.width === q.width && r.height === q.height)?.id ?? 'source';
 
     return h('div.setup-stream__settings',
@@ -246,8 +238,6 @@ export class SetupStreamDialog {
         this.presetId === 'custom' ? h('div.hint', t('video.preset.custom')) : null)),
       field(t('video.privacy'), null, h('div', segmented(accessOptions, c.access, v => { c.access = Number(v); this.render(); }),
         h('div.hint', t(accessInfo)))),
-      field(t('video.mode.title'), null, h('div', segmented(modeOptions, c.mode, v => { c.mode = Number(v); this.render(); }),
-        h('div.hint', c.mode === StreamMode.P2P ? t('video.mode.p2p.info') : t('video.mode.server.info')))),
 
       h('button.expander', {
         class: { open: this.advanced },

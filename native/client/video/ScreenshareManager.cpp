@@ -228,10 +228,9 @@ void ScreenshareManager::detachPreview(QVideoSink *sink)
 void ScreenshareManager::startStream(const QVariantMap &config)
 {
     StreamConfig cfg = configFromMap(config, StreamConfig{});
-    // Servidor (SFU) é o padrão; sem relay neste servidor (Node/Vercel, tailnet,
-    // sala web), transmite em P2P em vez de falhar.
-    if (cfg.mode == StreamMode::SFU && !m_handler->hasStreamingSFU())
-        cfg.mode = StreamMode::P2P;
+    // Com relay, toda transmissão vai pelo servidor (SFU): o P2P está desativado
+    // e não aparece na interface. Sem relay (tailnet, servidor Node), P2P é o único modo.
+    cfg.mode = m_handler->hasStreamingSFU() ? StreamMode::SFU : StreamMode::P2P;
     if (cfg.mode == StreamMode::SFU ? !m_handler->hasStreamingSFU() : !m_handler->hasStreamingP2P()) {
         emit errorOccurred(cfg.mode == StreamMode::SFU ? QStringLiteral("error.mode_not_supported")
                                                        : QStringLiteral("error.streaming_not_supported_by_server"));
@@ -1302,6 +1301,7 @@ QVariantList ScreenshareManager::items() const
             item["volume"] = v->volume;
             item["audioBlocked"] = m_inboundMuted;
             item["hasVideo"] = v->session && v->session->hasVideo();
+            item["sfu"] = v->session && v->peerClid == RelayClid;
             item["simulcast"] = v->simulcast && v->peerClid == RelayClid;
             item["layer"] = v->layer;
             item["qualityPreference"] = v->qualityPreference;

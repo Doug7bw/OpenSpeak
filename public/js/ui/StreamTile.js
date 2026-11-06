@@ -262,7 +262,7 @@ export class StreamTile {
           ? h('div.tile-center', h('div.status-pill', h('span.spinner'), t('video.join.status.reconnecting'))) : null,
         h('div.tile-actions',
           this.#volumeControl(),
-          view.simulcast && view.peerClid === RELAY_CLID ? this.#qualityControl(view, id) : null,
+          view.peerClid === RELAY_CLID ? this.#qualityControl(view, id) : null,
           btn('chart', t('video.action.stats'), () => a.showStats(id)),
           h('span.spacer'),
           this.pipWindow ? null : btn('eyeOff', t('video.stream.hide_stream'), () => a.hideStream(id)),
@@ -338,6 +338,10 @@ export class StreamTile {
 
   /** Simulcast (SFU): automático, alta ou baixa. */
   #qualityControl(view, id) {
+    if (!view.simulcast) {
+      return h('select.quality-select', { disabled: true, title: t('video.quality.single.hint'), 'aria-label': t('video.quality') },
+        h('option', t('video.quality.single')));
+    }
     const layer = t(view.layer === 'low' ? 'video.quality.low' : 'video.quality.high');
     const option = (value, label) => h('option', { value, selected: view.qualityPreference === value }, label);
     return h('select.quality-select', {

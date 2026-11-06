@@ -204,7 +204,7 @@ export class StreamArea {
       icon('stream', 'big'),
       h('h3', hiddenCount ? t('video.stream.empty_due_to_hidden') : t('video.stream.empty')),
       h('p', t('video.stream.empty.hint')),
-      this.handler.hasStreamingP2P
+      this.handler.hasStreamingSFU || this.handler.hasStreamingP2P
         ? h('button.btn.attention', { on: { click: () => this.actions.startStream() } }, icon('stream'), t('video.action.start_stream'))
         : null);
   }
@@ -215,7 +215,7 @@ export class StreamArea {
       .filter(id => this.handler.streams.get(id)?.cid === this.handler.ownClient?.cid);
     const pendingTotal = [...this.manager.ownStreams.values()].reduce((n, o) => n + o.joinRequests.size, 0);
     replaceChildren(this.toolbar,
-      this.handler.hasStreamingP2P
+      this.handler.hasStreamingSFU || this.handler.hasStreamingP2P
         ? h('button.btn.attention', { on: { click: () => this.actions.startStream() } }, icon('stream'), t('video.action.start_stream'))
         : null,
       pendingTotal ? h('button.btn.warn', {

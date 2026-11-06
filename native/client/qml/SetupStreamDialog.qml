@@ -49,8 +49,6 @@ Dialog {
     ]
 
     property var cfg: ({})
-    // Modo efetivo: a preferência é Servidor, mas sem relay neste servidor vira P2P.
-    readonly property bool sfuSelected: cfg.mode === 2 && Server.hasStreamingSFU
     property int sourceTab: 0 // 0 telas, 1 janelas, 2 câmeras, 3 teste
     property var sourceList: []
     property string selectedSource: ""
@@ -103,7 +101,8 @@ Dialog {
         } else {
             const c = Object.assign({}, Settings.lastStreamingConfig)
             c.name = "Stream de " + Server.clientName(Server.ownClid)
-            if (c.mode !== 1 && c.mode !== 2) c.mode = 2 // Servidor por padrão
+            // O modo não é escolhido: com relay vai pelo servidor (SFU); o app decide.
+            c.mode = 2
             cfg = c
         }
         if (editing) {
@@ -411,43 +410,6 @@ Dialog {
                         font.pixelSize: 12
                         text: I18n.t("video.privacy." + (dialog.cfg.access === 2 ? "contacts" : dialog.cfg.access === 3 ? "private" : "public") + ".info")
                     }
-                }
-
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    Layout.leftMargin: 16
-                    Layout.rightMargin: 16
-                    spacing: 6
-                    Label { text: I18n.t("video.mode.title"); color: Theme.textDim }
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 4
-                        Button {
-                            text: I18n.t("video.mode.p2p")
-                            Layout.fillWidth: true
-                            implicitWidth: 0
-                            checkable: true
-                            checked: !dialog.sfuSelected
-                            highlighted: checked
-                            enabled: !dialog.editing
-                            onClicked: dialog.patch({ mode: 1 })
-                        }
-                        Button {
-                            objectName: "modeServer"
-                            text: I18n.t("video.mode.server")
-                            Layout.fillWidth: true
-                            implicitWidth: 0
-                            checkable: true
-                            checked: dialog.sfuSelected
-                            highlighted: checked
-                            // O modo é fixo enquanto o stream está no ar.
-                            enabled: Server.hasStreamingSFU && !dialog.editing
-                            onClicked: dialog.patch({ mode: 2 })
-                            ToolTip.visible: hovered
-                            ToolTip.text: I18n.t(Server.hasStreamingSFU ? "video.mode.server.info" : "video.mode.server.unsupported")
-                        }
-                    }
-                    Label { Layout.fillWidth: true; wrapMode: Text.WordWrap; color: Theme.textDim; font.pixelSize: 12; text: I18n.t(dialog.sfuSelected ? "video.mode.server.info" : "video.mode.p2p.info") }
                 }
 
                 // avançado

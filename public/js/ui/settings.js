@@ -36,7 +36,7 @@ const DEFAULTS = {
     name: '',
     type: StreamType.SCREEN,
     access: StreamAccess.PUBLIC,
-    mode: StreamMode.P2P,
+    mode: StreamMode.SFU,
     bitrate: preset.bitrate,
     viewerLimit: 0,
     audio: true,

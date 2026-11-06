@@ -65,9 +65,10 @@ export class ScreenshareManager extends EventEmitter {
    * @param {{config:object, quality:object, source?:SharedVideoSource, deviceId?:string}} o
    */
   async startStream({ config, quality, source }) {
-    const sfu = config.mode === StreamMode.SFU;
-    if (!sfu && config.mode !== StreamMode.P2P) throw new Error('mode_not_supported');
-    if (sfu && !this.handler.hasStreamingSFU) throw new Error('mode_not_supported');
+    // Com relay, toda transmissão vai pelo servidor (SFU): o P2P está desativado
+    // e fora da interface. Sem relay (servidor Node/sala web), P2P é o único modo.
+    const sfu = this.handler.hasStreamingSFU;
+    config = { ...config, mode: sfu ? StreamMode.SFU : StreamMode.P2P };
     if (!sfu && !this.handler.hasStreamingP2P) throw new Error('streaming_not_supported_by_server');
     source ??= await SharedVideoSource.open({ type: config.type, audio: config.audio, quality });
     let streamIdentifier;
