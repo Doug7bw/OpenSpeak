@@ -1,3 +1,16 @@
+# OpenSpeak 1.0.39 — áudio da janela e captura alternativa
+
+- **Som da janela corrigido:** às vezes a transmissão de uma janela ia sem
+  áudio (por exemplo, quando o título dela mudava). Agora o app pega o som do
+  programa da própria janela, inclusive em apps da Microsoft Store.
+- O **áudio** vem ligado em toda transmissão nova; desligar vale só para aquela.
+- O **áudio do Discord** nunca vai junto da transmissão, e a opção "Sem áudio do
+  Discord" saiu.
+- O aviso para usar a **captura alternativa** só aparece depois de 10 segundos
+  de tela preta, para não incomodar em telas de carregamento.
+- Nova opção **Captura alternativa** nas opções avançadas da transmissão de
+  janela, para ligar ou desligar quando quiser, inclusive com a transmissão no ar.
+
 # OpenSpeak 1.0.38 — menu de qualidade mais limpo
 
 - No menu de qualidade, o modo automático aparece só como **Automática**. A
