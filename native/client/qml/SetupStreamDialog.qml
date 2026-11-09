@@ -492,6 +492,19 @@ Dialog {
                         ToolTip.text: I18n.t("video.announce.info")
                     }
 
+                    // Só janelas: escolha manual entre a captura sem borda e o WGC (borda amarela).
+                    readonly property bool altCaptureVisible: dialog.editing ? !!dialog.cfg.alternativeCaptureAvailable
+                                                                             : dialog.sourceTab === 1 && dialog.selectedSource !== ""
+                    Label { text: I18n.t("video.capture.alternative"); color: Theme.textDim; visible: parent.altCaptureVisible }
+                    Switch {
+                        objectName: "alternativeCaptureSwitch"
+                        visible: parent.altCaptureVisible
+                        checked: dialog.cfg.alternativeCapture === true
+                        onToggled: dialog.patch({ alternativeCapture: checked })
+                        ToolTip.visible: hovered
+                        ToolTip.text: I18n.t("video.capture.alternative.info")
+                    }
+
                     Label { text: I18n.t("video.audio.bitrate"); color: Theme.textDim; visible: !!dialog.cfg.audio }
                     ComboBox {
                         visible: !!dialog.cfg.audio

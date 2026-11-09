@@ -214,6 +214,8 @@ const STRINGS = {
   'video.view_settings.show_own_streams': 'Mostrar meus streams',
   'video.viewer_limit': 'Limite de espectadores',
   'video.viewer_limit.info': 'Quantidade máxima de espectadores. 0 = ilimitado.',
+  'video.capture.alternative': 'Captura alternativa',
+  'video.capture.alternative.info': 'Captura a janela pelo Windows.Graphics.Capture, que funciona com jogos que ficam pretos na captura normal. O Windows mostra uma borda amarela em volta da janela enquanto ela estiver ativa.',
   'video.announce': 'Mostrar ao vivo no bot do Discord',
   'video.announce.info': 'O bot do Discord do servidor avisa que você está ao vivo (status do canal de voz, chat e status do bot).',
   'video.viewers': 'Espectadores',

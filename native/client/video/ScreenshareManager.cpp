@@ -252,9 +252,11 @@ void ScreenshareManager::startStream(const QVariantMap &config)
 
     QVariantMap persisted = config;
     persisted.remove("name");
+    persisted.remove("alternativeCapture"); // vale para a janela escolhida, não para a próxima
     m_settings->setLastStreamingConfig(persisted);
 
-    m_conn->sendCommand(QStringLiteral("setupstream"), wireConfig(cfg), [this, cfg, token](const CommandResult &r) {
+    const QVariant alternativeCapture = config.value("alternativeCapture");
+    m_conn->sendCommand(QStringLiteral("setupstream"), wireConfig(cfg), [this, cfg, token, alternativeCapture](const CommandResult &r) {
         auto node = m_pendingSources.extract(token);
         if (node.empty())
             return;
@@ -272,6 +274,7 @@ void ScreenshareManager::startStream(const QVariantMap &config)
         OwnStream &ref = *own;
         m_own[id] = std::move(own);
         startMedia(ref);
+        applyAlternativeCapture(ref, alternativeCapture);
         // SFU: um único envio, para o servidor, que repassa aos espectadores.
         if (ref.sfu())
             addOutbound(ref, RelayClid, {QStringLiteral("video/H264")});
@@ -457,8 +460,11 @@ void ScreenshareManager::updateStream(const QString &id, const QVariantMap &conf
     const auto pending = own.joinRequests.values();
     for (const JoinReq &req : pending)
         maybeAutoAccept(own, req);
+    applyAlternativeCapture(own, config.value("alternativeCapture"));
     QVariantMap persisted = config;
     persisted.remove("name");
+    persisted.remove("alternativeCapture");
+    persisted.remove("alternativeCaptureAvailable");
     m_settings->setLastStreamingConfig(persisted);
     notifyChanged();
 }
@@ -535,7 +541,9 @@ QVariantMap ScreenshareManager::ownConfig(const QString &id) const
     return {{"name", c.name}, {"type", int(c.type)}, {"access", int(c.access)}, {"mode", int(c.mode)},
             {"bitrate", c.bitrate}, {"viewerLimit", c.viewerLimit}, {"audio", c.audio}, {"announce", c.announce}, {"width", c.width},
             {"height", c.height}, {"fps", c.fps}, {"audioBitrate", c.audioBitrate},
-            {"sourceLabel", it->second->source->label()}};
+            {"sourceLabel", it->second->source->label()},
+            {"alternativeCaptureAvailable", it->second->source->alternativeCaptureAvailable()},
+            {"alternativeCapture", it->second->source->usingAlternativeCapture()}};
 }
 
 void ScreenshareManager::attachOwnPreview(const QString &id, QVideoSink *sink)
@@ -572,6 +580,21 @@ void ScreenshareManager::watchCaptureFallback(OwnStream &own)
         if (it != m_own.end())
             emit captureFallbackSuggested(id, it->second->source->label());
     });
+}
+
+void ScreenshareManager::applyAlternativeCapture(OwnStream &own, const QVariant &use)
+{
+    // Escolha manual nas opções da transmissão (sem a chave: mantém o que está).
+    if (!use.isValid())
+        return;
+    const bool pending = own.source->alternativeCapturePending();
+    if (own.source->setAlternativeCapture(use.toBool())) {
+        own.encoder->requestKeyFrame();
+        if (own.encoderLow)
+            own.encoderLow->requestKeyFrame();
+    }
+    if (pending && !own.source->alternativeCapturePending())
+        emit captureFallbackResolved(own.id);
 }
 
 void ScreenshareManager::respondAlternativeCapture(const QString &id, bool use)

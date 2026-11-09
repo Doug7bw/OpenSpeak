@@ -195,6 +195,7 @@ private:
     void startMedia(OwnStream &own);
     void startAudioFor(OwnStream &own);
     void watchCaptureFallback(OwnStream &own);
+    void applyAlternativeCapture(OwnStream &own, const QVariant &use);
     void configureEncoder(OwnStream &own);
     void scheduleThumbnails(OwnStream &own);
     void removeSession(OwnStream &own, int clid);

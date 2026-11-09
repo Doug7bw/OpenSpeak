@@ -81,6 +81,12 @@ public:
     bool useAlternativeCapture();
     /// Mantém a captura atual e não pergunta mais nesta fonte.
     void declineAlternativeCapture();
+    /// Escolha manual (opções da transmissão): janela com as duas capturas possíveis?
+    bool alternativeCaptureAvailable() const;
+    /// Está no Windows.Graphics.Capture (com a borda amarela)?
+    bool usingAlternativeCapture() const { return m_desc.type == StreamType::Window && m_window != nullptr; }
+    /// Liga (WGC, com borda) ou desliga (volta à captura sem borda). true se trocou.
+    bool setAlternativeCapture(bool use);
 
 signals:
     void frameAvailable(const QVideoFrame &frame);
@@ -93,6 +99,7 @@ private:
     void onFrame(const QVideoFrame &frame);
     void renderTestPattern();
     void startWindowCapture(const QCapturableWindow &window);
+    void startBorderlessWindowCapture(); // WindowGrabber em m_fallbackHwnd
     void startScreenCapture(QScreen *screen);
 
     SourceDescriptor m_desc;
@@ -101,6 +108,8 @@ private:
     QString m_error;
     QString m_captureMethod;
     QCapturableWindow m_fallbackWindow;
+    quintptr m_fallbackHwnd = 0; // janela com captura sem borda (0: só há o WGC)
+    int m_fps = 30;
     bool m_askBeforeFallback = false;
     bool m_fallbackPending = false;  // pergunta em aberto
     bool m_fallbackDeclined = false; // recusou: não pergunta mais
