@@ -17,6 +17,13 @@
 
 namespace openspeak {
 
+namespace {
+// Segundos de preto antes de propor a captura com borda amarela: na prévia do seletor
+// troca sozinha (rápido); na transmissão pergunta, então espera mais para não incomodar
+// quem só está carregando um jogo ou passando por uma tela de loading.
+int blackFallbackSeconds(bool askBeforeFallback) { return askBeforeFallback ? 10 : 3; }
+} // namespace
+
 VideoSource::VideoSource(QObject *parent) : QObject(parent)
 {
     m_session.setVideoSink(&m_sink);
@@ -197,6 +204,7 @@ bool VideoSource::open(const SourceDescriptor &desc, int targetFps)
                 emit ended();
             });
             m_fallbackWindow = window;
+            m_grabber->setBlackFallbackSeconds(blackFallbackSeconds(m_askBeforeFallback));
             connect(m_grabber.get(), &WindowGrabber::fallbackRequested, this, [this] {
                 if (!m_askBeforeFallback) {
                     useAlternativeCapture();
@@ -238,6 +246,13 @@ bool VideoSource::open(const SourceDescriptor &desc, int targetFps)
     }
     m_active = true;
     return true;
+}
+
+void VideoSource::setAskBeforeFallback(bool ask)
+{
+    m_askBeforeFallback = ask;
+    if (m_grabber && m_desc.type == StreamType::Window)
+        m_grabber->setBlackFallbackSeconds(blackFallbackSeconds(ask));
 }
 
 bool VideoSource::useAlternativeCapture()

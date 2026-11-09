@@ -72,9 +72,10 @@ public:
     /// Como os quadros estão sendo capturados (informações da transmissão).
     QString captureMethod() const { return m_captureMethod; }
 
-    /// Janela preta há ~3 s na captura sem borda: com isto ligado (transmissão), emite
-    /// alternativeCaptureSuggested em vez de trocar sozinho para o WGC (com borda).
-    void setAskBeforeFallback(bool ask) { m_askBeforeFallback = ask; }
+    /// Janela preta na captura sem borda: sem isto (prévia do seletor), troca sozinha para o
+    /// WGC (com borda) depois de ~3 s; com isto ligado (transmissão), espera 10 s e emite
+    /// alternativeCaptureSuggested em vez de trocar.
+    void setAskBeforeFallback(bool ask);
     bool alternativeCapturePending() const { return m_fallbackPending; }
     /// Troca para o Windows.Graphics.Capture. false se não houver o que trocar.
     bool useAlternativeCapture();

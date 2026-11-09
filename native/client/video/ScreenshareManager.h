@@ -104,7 +104,7 @@ signals:
     void statsChanged(const QString &id);
     void joinRequest(const QString &id, int clid, const QString &nickname);
     void joinRequestResolved(const QString &id, int clid);
-    /// A janela transmitida está preta há ~3 s: pergunta se usa a captura alternativa.
+    /// A janela transmitida está preta há ~10 s: pergunta se usa a captura alternativa.
     void captureFallbackSuggested(const QString &id, const QString &label);
     void captureFallbackResolved(const QString &id);
     void errorOccurred(const QString &message);

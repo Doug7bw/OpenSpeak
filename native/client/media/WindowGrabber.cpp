@@ -26,7 +26,6 @@ namespace {
 
 constexpr UINT kPrintWindowFullContent = 0x2; // PW_RENDERFULLCONTENT (Windows 8.1+)
 constexpr ULONGLONG kOcclusionIntervalMs = 250;
-constexpr int kBlackFallbackSeconds = 3; // folga para um alt-tab não cair na captura com borda
 
 RECT frameBounds(HWND hwnd)
 {
@@ -587,13 +586,15 @@ void WindowGrabber::tick()
     if (!ok)
         return;
 
-    // C) preto nos dois modos por ~3 s: PW_RENDERFULLCONTENT não funciona para esta janela.
+    // C) preto nos dois modos por m_blackFallbackSeconds (3 s; folga para um alt-tab não
+    // cair na captura com borda): PW_RENDERFULLCONTENT não funciona para esta janela.
     // Só avisa (uma vez por trecho preto) e segue capturando: quem decide trocar para o
     // Windows.Graphics.Capture é o VideoSource (na transmissão, pergunta antes).
     if (method == Impl::Method::PrintWindow && d.outIsBlack()) {
-        if (++d.blackStreak >= kBlackFallbackSeconds * m_fps && !d.blackReported) {
+        const int seconds = m_blackFallbackSeconds;
+        if (++d.blackStreak >= seconds * m_fps && !d.blackReported) {
             d.blackReported = true;
-            qInfo() << "WindowGrabber: duplicação e PrintWindow só devolvem preto há 3 s";
+            qInfo() << "WindowGrabber: duplicação e PrintWindow só devolvem preto há" << seconds << "s";
             emit fallbackRequested();
         }
     } else {
