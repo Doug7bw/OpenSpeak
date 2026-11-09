@@ -192,8 +192,10 @@ bool VideoSource::open(const SourceDescriptor &desc, int targetFps)
         }
         const QCapturableWindow window = desc.windowSpecified ? desc.window : windows[idx];
         const auto *handle = QCapturableWindowPrivate::handle(window);
-        if (handle && handle->id)
+        if (handle && handle->id) {
             m_appName = appNameForWindow(handle->id);
+            m_windowHwnd = handle->id;
+        }
         // OPENSPEAK_WINDOW_CAPTURE=wgc força o Windows.Graphics.Capture (com a borda amarela).
         if (handle && handle->id && qEnvironmentVariable("OPENSPEAK_WINDOW_CAPTURE") != QLatin1String("wgc")) {
             m_fallbackWindow = window;
@@ -310,6 +312,7 @@ void VideoSource::close()
     m_fallbackPending = false;
     m_fallbackDeclined = false;
     m_fallbackHwnd = 0;
+    m_windowHwnd = 0;
     if (m_screen)
         m_screen->stop();
     if (m_window)

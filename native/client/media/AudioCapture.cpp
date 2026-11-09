@@ -63,6 +63,31 @@ BOOL CALLBACK findWindow(HWND hwnd, LPARAM param)
     return TRUE;
 }
 
+BOOL CALLBACK findOtherProcessChild(HWND hwnd, LPARAM param)
+{
+    auto *pid = reinterpret_cast<DWORD *>(param);
+    DWORD childPid = 0;
+    GetWindowThreadProcessId(hwnd, &childPid);
+    if (childPid && childPid != *pid) {
+        *pid = childPid;
+        return FALSE;
+    }
+    return TRUE;
+}
+
+QList<AudioCapture::ProcessEntry> processSnapshot()
+{
+    QList<AudioCapture::ProcessEntry> out;
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE)
+        return out;
+    PROCESSENTRY32W pe{sizeof(pe)};
+    for (BOOL ok = Process32FirstW(snap, &pe); ok; ok = Process32NextW(snap, &pe))
+        out.append({pe.th32ProcessID, pe.th32ParentProcessID, QString::fromWCharArray(pe.szExeFile)});
+    CloseHandle(snap);
+    return out;
+}
+
 } // namespace
 
 AudioCapture::AudioCapture(QObject *parent) : QObject(parent) {}
@@ -74,6 +99,40 @@ quint32 AudioCapture::pidForWindowTitle(const QString &title)
     WindowSearch search{title.toStdWString()};
     EnumWindows(findWindow, reinterpret_cast<LPARAM>(&search));
     return search.pid;
+}
+
+quint32 AudioCapture::familyRoot(quint32 pid, const QList<ProcessEntry> &processes)
+{
+    auto find = [&](quint32 p) -> const ProcessEntry * {
+        for (const ProcessEntry &e : processes)
+            if (e.pid == p)
+                return &e;
+        return nullptr;
+    };
+    const ProcessEntry *current = find(pid);
+    for (int guard = 0; current && guard < 64; ++guard) { // PIDs reciclados podem formar ciclo
+        const ProcessEntry *parent = current->parent != current->pid ? find(current->parent) : nullptr;
+        if (!parent || parent->exe.compare(current->exe, Qt::CaseInsensitive) != 0)
+            break;
+        current = parent;
+    }
+    return current ? current->pid : pid;
+}
+
+quint32 AudioCapture::pidForWindow(quintptr id)
+{
+    const HWND hwnd = reinterpret_cast<HWND>(id);
+    DWORD pid = 0;
+    if (!hwnd || !GetWindowThreadProcessId(hwnd, &pid) || !pid)
+        return 0;
+    const QList<ProcessEntry> processes = processSnapshot();
+    // App UWP: a moldura é do ApplicationFrameHost; o som sai do processo da CoreWindow filha.
+    for (const ProcessEntry &e : processes)
+        if (e.pid == pid && e.exe.compare(QLatin1String("ApplicationFrameHost.exe"), Qt::CaseInsensitive) == 0) {
+            EnumChildWindows(hwnd, findOtherProcessChild, reinterpret_cast<LPARAM>(&pid));
+            break;
+        }
+    return familyRoot(pid, processes);
 }
 
 bool AudioCapture::start(Mode mode, quint32 pid)
@@ -177,6 +236,14 @@ void AudioCapture::loopbackThread(Mode mode, quint32 pid)
         return mode == Mode::Process ? pid : GetCurrentProcessId();
     };
     QString lastExcluded;
+    bool reported = false; // avisa a falha uma vez; segue tentando a cada segundo
+    auto retryLater = [&](const QString &what, HRESULT hr) {
+        if (!reported)
+            fail(what, hr);
+        reported = true;
+        for (int i = 0; i < 10 && m_running; ++i)
+            Sleep(100);
+    };
 
     while (m_running) {
         const DWORD target = excludedTarget();
@@ -204,8 +271,8 @@ void AudioCapture::loopbackThread(Mode mode, quint32 pid)
         HRESULT hr = ActivateAudioInterfaceAsync(VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK, __uuidof(IAudioClient), &pv,
                                                  handler.Get(), &op);
         if (FAILED(hr) || WaitForSingleObject(handler->done, 5000) != WAIT_OBJECT_0 || FAILED(handler->hr)) {
-            fail(QStringLiteral("falha ao ativar captura de áudio"), FAILED(hr) ? hr : handler->hr);
-            break;
+            retryLater(QStringLiteral("falha ao ativar captura de áudio"), FAILED(hr) ? hr : handler->hr);
+            continue;
         }
         ComPtr<IAudioClient> client = handler->client;
         hr = client->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
@@ -218,9 +285,10 @@ void AudioCapture::loopbackThread(Mode mode, quint32 pid)
         if (SUCCEEDED(hr))
             hr = client->Start();
         if (FAILED(hr)) {
-            fail(QStringLiteral("falha ao iniciar captura de áudio"), hr);
-            break;
+            retryLater(QStringLiteral("falha ao iniciar captura de áudio"), hr);
+            continue;
         }
+        reported = false;
 
         ULONGLONG nextCheck = GetTickCount64() + 1000;
         while (m_running) {

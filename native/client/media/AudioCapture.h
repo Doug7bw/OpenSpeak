@@ -3,7 +3,7 @@
 //  - Tela:   todo o áudio do sistema EXCETO o próprio OpenSpeak (evita eco), ou
 //            EXCETO o Discord (o Windows só exclui uma árvore de processos; enquanto
 //            o Discord estiver fechado, volta a excluir o OpenSpeak)
-//  - Janela: apenas o áudio do processo dono da janela
+//  - Janela: apenas o áudio do processo dono da janela (pelo HWND; pidForWindow)
 //  - Câmera: microfone padrão
 // Usa o "process loopback" do WASAPI (Windows 10 2004+), como o
 // ProcessAudioCapturer do TeamSpeak. Saída: float32 intercalado.
@@ -37,8 +37,19 @@ public:
     static constexpr int SampleRate = 48000;
     static constexpr int Channels = 2;
 
-    /// Procura o PID do processo dono de uma janela pelo título.
+    /// Procura o PID do processo dono de uma janela pelo título (reserva, sem HWND).
     static quint32 pidForWindowTitle(const QString &title);
+    /// Processo cujo áudio acompanha a janela: o dono do HWND (num app UWP, o processo do
+    /// app, não o ApplicationFrameHost), subindo até a raiz dos processos com o mesmo
+    /// executável, para a árvore incluir também o processo irmão que toca o som.
+    static quint32 pidForWindow(quintptr hwnd);
+    struct ProcessEntry {
+        quint32 pid = 0;
+        quint32 parent = 0;
+        QString exe;
+    };
+    /// Sobe de `pid` pelos pais enquanto o executável for o mesmo (sem diferenciar maiúsculas).
+    static quint32 familyRoot(quint32 pid, const QList<ProcessEntry> &processes);
     /// PID do processo raiz do Discord (estável, PTB ou Canary), ou 0 se fechado.
     static quint32 discordRootPid();
     /// Entre processos (pid, pai), a raiz: o de menor PID cujo pai não está na lista.

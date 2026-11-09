@@ -140,8 +140,6 @@ ScreenshareManager::StreamConfig ScreenshareManager::configFromMap(const QVarian
         c.audio = m.value("audio").toBool();
     if (m.contains("announce"))
         c.announce = m.value("announce").toBool();
-    if (m.contains("excludeDiscord"))
-        c.excludeDiscord = m.value("excludeDiscord").toBool();
     if (m.contains("width"))
         c.width = m.value("width").toInt();
     if (m.contains("height"))
@@ -382,16 +380,23 @@ void ScreenshareManager::startAudioFor(OwnStream &own)
         own.audio->start(AudioCapture::Mode::Microphone);
         break;
     case StreamType::Window: {
-        const quint32 pid = AudioCapture::pidForWindowTitle(own.source->label());
-        own.audioLabel = pid ? QStringLiteral("Somente a janela") : QStringLiteral("Sistema, sem o OpenSpeak");
-        own.audio->start(pid ? AudioCapture::Mode::Process : AudioCapture::Mode::SystemExcludingSelf, pid);
-        break;
+        // Pelo HWND da captura: o título muda (aba, música, notificações) e podia apontar
+        // para outro processo, ou nenhum, e o stream ficava sem som.
+        const quintptr hwnd = own.source->windowHandle();
+        const quint32 pid = hwnd ? AudioCapture::pidForWindow(hwnd) : AudioCapture::pidForWindowTitle(own.source->label());
+        qCInfo(lcShare) << "áudio da janela: processo" << pid;
+        if (pid) {
+            own.audioLabel = QStringLiteral("Somente a janela");
+            own.audio->start(AudioCapture::Mode::Process, pid);
+            break;
+        }
+        [[fallthrough]];
     }
     default:
-        // Com "sem Discord", o rótulo definitivo vem do excludedChanged (Discord aberto ou não).
+        // O áudio do Discord nunca vai junto; o rótulo definitivo vem do excludedChanged
+        // (Discord aberto ou não).
         own.audioLabel = QStringLiteral("Sistema, sem o OpenSpeak");
-        own.audio->start(own.config.excludeDiscord ? AudioCapture::Mode::SystemExcludingDiscord
-                                                   : AudioCapture::Mode::SystemExcludingSelf);
+        own.audio->start(AudioCapture::Mode::SystemExcludingDiscord);
     }
     updateInboundMute();
 }
@@ -443,13 +448,10 @@ void ScreenshareManager::updateStream(const QString &id, const QVariantMap &conf
     OwnStream &own = *it->second;
     const StreamType type = own.config.type;
     const StreamMode mode = own.config.mode; // o modo não muda com o stream no ar
-    const bool excludeDiscord = own.config.excludeDiscord;
     own.config = configFromMap(config, own.config);
     own.config.type = type;
     own.config.mode = mode;
     configureEncoder(own);
-    if (own.config.excludeDiscord != excludeDiscord)
-        startAudioFor(own);
     if (own.opus)
         own.opus->setBitrate(own.config.audioBitrate);
     QJsonObject wire = wireConfig(own.config);

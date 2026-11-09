@@ -64,9 +64,7 @@ const STRINGS = {
 
   'video.audio': 'Capturar áudio',
   'video.audio.bitrate': 'Bitrate de áudio [Kbps]',
-  'video.audio.info': 'Captura e transmite o áudio junto com o vídeo.',
-  'video.audio.exclude_discord': 'Sem áudio do Discord',
-  'video.audio.exclude_discord.info': 'Não transmite o áudio do app do Discord (vozes e sons). Enquanto estiver ativo, as transmissões que você assistir ficam sem som, para o áudio delas não vazar para a sua.',
+  'video.audio.info': 'Captura e transmite o áudio junto com o vídeo: o da janela escolhida ou, na tela inteira, o do sistema. O áudio do Discord nunca vai junto.',
   'video.audio.discord.inbound_muted': 'Sua transmissão está sem o áudio do Discord, então as transmissões que você assiste ficam sem som enquanto ela durar.',
   'video.audio.discord.blocked': 'Sem som enquanto você transmite a tela sem o áudio do Discord',
   'video.bitrate': 'Bitrate',

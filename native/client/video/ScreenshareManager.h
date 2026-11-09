@@ -120,7 +120,6 @@ private:
         int bitrate = 3'000'000;
         int viewerLimit = 0;
         bool audio = true;
-        bool excludeDiscord = true;  // tela: não transmite o áudio do Discord
         bool announce = true;        // aparece no bot do Discord
         QString app;                 // programa da janela (VideoSource::appName)
         int width = 1280, height = 720, fps = 30, audioBitrate = 128'000;

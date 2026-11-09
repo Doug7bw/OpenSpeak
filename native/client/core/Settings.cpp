@@ -59,9 +59,10 @@ QVariantMap Settings::lastStreamingConfig() const
     def("mode", int(StreamMode::SFU)); // cai para P2P se o servidor não tiver relay
     def("bitrate", p->bitrate);
     def("viewerLimit", 0);
-    def("audio", true);
+    // Toda transmissão começa capturando o áudio (desligar vale só para aquela).
+    cfg.insert(QStringLiteral("audio"), true);
+    cfg.remove(QStringLiteral("excludeDiscord")); // o áudio do Discord agora é sempre excluído
     def("announce", true); // "Mostrar ao vivo no bot do Discord"
-    def("excludeDiscord", true); // "Sem áudio do Discord" ligado por padrão
     def("width", p->width);
     def("height", p->height);
     def("fps", p->fps);

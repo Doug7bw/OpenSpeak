@@ -53,6 +53,9 @@ public:
     /// para telas e câmeras. Vai no `app` do stream (bot do Discord).
     QString appName() const { return m_appName; }
     static QString appNameForWindow(quintptr hwnd);
+    /// HWND da janela capturada (0 para telas, câmeras ou sem handle). O áudio da
+    /// transmissão sai do processo dela.
+    quintptr windowHandle() const { return m_windowHwnd; }
     bool isActive() const { return m_active; }
     QSize lastFrameSize() const { return m_lastSize; }
 
@@ -108,6 +111,7 @@ private:
     QString m_error;
     QString m_captureMethod;
     QCapturableWindow m_fallbackWindow;
+    quintptr m_windowHwnd = 0;
     quintptr m_fallbackHwnd = 0; // janela com captura sem borda (0: só há o WGC)
     int m_fps = 30;
     bool m_askBeforeFallback = false;

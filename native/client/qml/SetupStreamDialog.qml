@@ -310,14 +310,6 @@ Dialog {
                     ToolTip.visible: hovered
                     ToolTip.text: I18n.t("video.audio.info")
                 }
-                Switch {
-                    text: I18n.t("video.audio.exclude_discord")
-                    checked: !!dialog.cfg.excludeDiscord
-                    visible: !dialog.sourceOnly && !!dialog.cfg.audio && dialog.sourceTab === 0
-                    onToggled: dialog.patch({ excludeDiscord: checked })
-                    ToolTip.visible: hovered
-                    ToolTip.text: I18n.t("video.audio.exclude_discord.info")
-                }
             }
         }
 

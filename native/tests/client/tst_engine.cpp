@@ -92,15 +92,39 @@ private slots:
         QCOMPARE(AudioCapture::rootProcess({}), 0u);
     }
 
-    void excludesDiscordAudioByDefault()
+    void capturesAudioByDefault()
     {
-        Settings settings(QStringLiteral("exclude-discord-default"), true);
+        Settings settings(QStringLiteral("audio-default"), true);
         settings.setLastStreamingConfig({});
-        QCOMPARE(settings.lastStreamingConfig().value("excludeDiscord"), QVariant(true));
-        // Quem desligou a opção continua com a escolha salva.
-        settings.setLastStreamingConfig({{"excludeDiscord", false}});
-        QCOMPARE(settings.lastStreamingConfig().value("excludeDiscord"), QVariant(false));
+        QCOMPARE(settings.lastStreamingConfig().value("audio"), QVariant(true));
+        // Desligar vale só para aquela transmissão: a próxima volta a capturar o áudio.
+        settings.setLastStreamingConfig({{"audio", false}, {"excludeDiscord", false}});
+        QCOMPARE(settings.lastStreamingConfig().value("audio"), QVariant(true));
+        // O áudio do Discord é sempre excluído: a opção antiga salva não volta.
+        QVERIFY(!settings.lastStreamingConfig().contains("excludeDiscord"));
         settings.setLastStreamingConfig({});
+    }
+
+    void windowAudioFollowsProcessFamily()
+    {
+        const QList<AudioCapture::ProcessEntry> procs{
+            {100, 4, "explorer.exe"}, {200, 100, "chrome.exe"}, {210, 200, "chrome.exe"},
+            {220, 210, "CHROME.EXE"}, {300, 100, "game.exe"}, {310, 300, "helper.exe"}};
+        // Janela num processo filho: sobe até a raiz com o mesmo executável.
+        QCOMPARE(AudioCapture::familyRoot(220, procs), 200u);
+        QCOMPARE(AudioCapture::familyRoot(200, procs), 200u);
+        // Pai com outro executável: fica no próprio processo.
+        QCOMPARE(AudioCapture::familyRoot(310, procs), 310u);
+        QCOMPARE(AudioCapture::familyRoot(300, procs), 300u);
+        // Processo desconhecido (já saiu): devolve o mesmo PID.
+        QCOMPARE(AudioCapture::familyRoot(999, procs), 999u);
+        // Janela real deste processo (o pai, o ctest, tem outro executável).
+        QWindow window;
+        window.create();
+        QCOMPARE(AudioCapture::pidForWindow(window.winId()), quint32(GetCurrentProcessId()));
+        QCOMPARE(AudioCapture::pidForWindow(0), 0u);
+        // Ciclo de PIDs reciclados não trava.
+        QCOMPARE(AudioCapture::familyRoot(1, {{1, 2, "a.exe"}, {2, 1, "a.exe"}}) != 0, true);
     }
 
     void excludingDiscordReportsWhatIsExcluded()
