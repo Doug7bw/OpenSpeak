@@ -3,6 +3,9 @@
 // no status do próprio bot. Cada aviso liga/desliga na config; quem transmite
 // escolhe por stream ("Mostrar ao vivo no bot do Discord", configurações avançadas).
 //
+// Também corrige links do X/Twitter (desligado por padrão, liga por servidor com
+// /openspeak links): troca por fxtwitter.com para o Discord mostrar a prévia certa.
+//
 // Uso: DISCORD_TOKEN=... node src/bot.js   (config em ./config.json ou OPENSPEAK_BOT_CONFIG)
 
 import fs from 'node:fs';
@@ -10,14 +13,15 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   ActivityType, ChannelType, Client, EmbedBuilder, GatewayIntentBits, InteractionContextType, MessageFlags,
-  PermissionFlagsBits, Routes,
+  MessageType, PermissionFlagsBits, Routes,
   SlashCommandBuilder,
 } from 'discord.js';
 import {
-  NOTICES, appLabel, applySettings, checkConfig, diff, formatDuration, parseLive, parseStats, planVoiceUpdates,
+  NOTICES, appLabel, applySettings, checkConfig, diff, guildNotices, migrateMessages, migrateSettings, formatDuration, parseLive, parseStats, planVoiceUpdates,
   mediaText, presenceText, serverText, statsVars, streamKey, voiceStatusText, watchersText,
 } from './live.js';
 import { startWebhook } from './webhook.js';
+import { LINK_SERVICES, chooseLinkAction, linkSettings, rewriteXLinks, webhookName } from './xlinks.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CONFIG_FILE = path.resolve(process.env.OPENSPEAK_BOT_CONFIG ?? path.join(ROOT, 'config.json'));
@@ -55,9 +59,12 @@ function loadState() {
       messages: state.messages && typeof state.messages === 'object' ? state.messages : {},
       voice: state.voice && typeof state.voice === 'object' ? state.voice : {}, // canal -> status escrito
       settings: state.settings && typeof state.settings === 'object' ? state.settings : {}, // escolhas do /openspeak
+      // Por servidor do Discord: { chat, voiceStatus, links } (escolhas do /openspeak naquele servidor).
+      guilds: state.guilds && typeof state.guilds === 'object' ? state.guilds : {},
+      links: state.links, // formato antigo (só migração)
     };
   } catch {
-    return { messages: {}, voice: {}, settings: {} };
+    return { messages: {}, voice: {}, settings: {}, guilds: {} };
   }
 }
 
@@ -74,10 +81,11 @@ function explain(err) {
   if (err?.code === 50013) return 'sem permissão (veja as permissões no README)';
   if (err?.code === 50001) return 'o bot não tem acesso ao canal';
   if (err?.code === 10003) return 'canal não encontrado (confira o ID)';
+  if (err?.code === 30007) return 'o canal já tem webhooks demais (limite do Discord)';
   return err?.message ?? String(err);
 }
 
-/** /openspeak: escolhe o canal do chat e liga/desliga os avisos pelo Discord. */
+/** /openspeak: avisos e links deste servidor (o status do bot é global). */
 const ADMIN_COMMAND = new SlashCommandBuilder()
   .setName('openspeak')
   .setDescription('Avisos de transmissões do OpenSpeak')
@@ -85,7 +93,7 @@ const ADMIN_COMMAND = new SlashCommandBuilder()
   .setContexts(InteractionContextType.Guild)
   .addSubcommand(sub => sub
     .setName('canal')
-    .setDescription('Canal de texto onde o bot avisa quem está ao vivo')
+    .setDescription('Canal de texto deste servidor onde o bot avisa quem está ao vivo')
     .addChannelOption(opt => opt
       .setName('canal').setDescription('Canal de texto').setRequired(true)
       .addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)))
@@ -100,7 +108,38 @@ const ADMIN_COMMAND = new SlashCommandBuilder()
         { name: 'Status do bot', value: 'status' },
       ))
     .addBooleanOption(opt => opt.setName('ligado').setDescription('Ligar ou desligar').setRequired(true)))
-  .addSubcommand(sub => sub.setName('ver').setDescription('Mostra a configuração atual dos avisos'));
+  .addSubcommand(sub => sub
+    .setName('voz')
+    .setDescription('Canal de voz do status (sem canal: as calls com alguém conectado)')
+    .addChannelOption(opt => opt
+      .setName('canal').setDescription('Canal de voz fixo (deixe vazio para as calls com gente)')
+      .addChannelTypes(ChannelType.GuildVoice)))
+  .addSubcommand(sub => sub
+    .setName('mencao')
+    .setDescription('Quem o aviso no chat menciona')
+    .addStringOption(opt => opt
+      .setName('quem').setDescription('Quem mencionar').setRequired(true)
+      .addChoices(
+        { name: 'Ninguém', value: 'ninguem' },
+        { name: '@here', value: '@here' },
+        { name: '@everyone', value: '@everyone' },
+        { name: 'Um cargo (escolha em "cargo")', value: 'cargo' },
+      ))
+    .addRoleOption(opt => opt.setName('cargo').setDescription('Cargo a mencionar')))
+  .addSubcommand(sub => sub
+    .setName('links')
+    .setDescription('Corrige links do X/Twitter neste servidor (troca por fxtwitter para a prévia funcionar)')
+    .addBooleanOption(opt => opt.setName('ligado').setDescription('Ligar ou desligar').setRequired(true))
+    .addStringOption(opt => opt
+      .setName('modo').setDescription('Como corrigir (padrão: responder)')
+      .addChoices(
+        { name: 'Responder: tira a prévia original e responde com o link corrigido', value: 'responder' },
+        { name: 'Substituir: apaga a mensagem e reenvia como o autor', value: 'substituir' },
+      ))
+    .addStringOption(opt => opt
+      .setName('servico').setDescription('Serviço da prévia (padrão: fxtwitter.com)')
+      .addChoices(...LINK_SERVICES.map(s => ({ name: s, value: s })))))
+  .addSubcommand(sub => sub.setName('ver').setDescription('Mostra a configuração deste servidor'));
 
 /** Comandos para qualquer pessoa (também na DM com o bot). */
 const PUBLIC_CONTEXTS = [InteractionContextType.Guild, InteractionContextType.BotDM];
@@ -119,6 +158,11 @@ const ACTIVITY_TYPE = {
   listening: ActivityType.Listening, competing: ActivityType.Competing,
 };
 
+const LINK_MODE_NAME = {
+  responder: 'responde com o link corrigido (tira a prévia original)',
+  substituir: 'apaga e reenvia como o autor',
+};
+
 const NOTICE_NAME = { chat: 'Chat', voiceStatus: 'Status do canal de voz', presence: 'Status do bot' };
 
 class LiveBot {
@@ -126,16 +170,23 @@ class LiveBot {
     this.baseConfig = baseConfig;
     this.client = client;
     this.state = loadState();
+    this.migrateState();
+    // Global: status do bot, textos e servidor OpenSpeak. Chat e status de voz: por servidor (notices()).
     const config = (this.config = applySettings(baseConfig, this.state.settings));
     this.known = new Map(); // chave -> stream (último visto)
     this.watched = new Map(); // chave -> apelidos de quem assistiu em algum momento
+    this.chatFailed = new Set(); // "stream|servidor|canal" que falhou: não insiste a cada consulta
     this.failures = 0;
     this.voiceText = '';
-    // Status já escrito por canal de voz. Com canal fixo, a primeira escrita é
-    // forçada (limpa um status antigo); no automático só se limpa o que o bot escreveu.
-    this.voiceCurrent = new Map(config.voiceStatus.channelId ? [[config.voiceStatus.channelId, '\0']]
-      : Object.entries(this.state.voice)); // limpa o que ficou de antes de um reinício
+    // Status já escrito por canal de voz (limpa o que ficou de antes de um reinício).
+    // Num canal fixo a primeira escrita é forçada ('\0'), para limpar um status antigo.
+    this.voiceCurrent = new Map(Object.entries(this.state.voice));
+    for (const guild of this.client.guilds.cache.values()) {
+      const v = this.notices(guild.id).voiceStatus;
+      if (v.enabled && v.channelId && !this.voiceCurrent.has(v.channelId)) this.voiceCurrent.set(v.channelId, '\0');
+    }
     this.voiceQueue = Promise.resolve();
+    this.owner = null; // dono da aplicação (User ou Team), para o status do bot
     this.lastPresence = null;
     // Status do bot: alterna entre quem está ao vivo e a carga do servidor.
     this.presenceTexts = [];
@@ -150,6 +201,49 @@ class LiveBot {
     this.stats = parseStats(null); // carga do servidor (desconhecida até a primeira resposta)
     this.queue = Promise.resolve(); // consultas e webhooks, um de cada vez
     this.liveUrl = new URL('/api/live', config.openspeakUrl).toString();
+    this.webhooks = new Map(); // canal -> Promise<Webhook> (um webhook do bot por canal)
+    this.messageIntent = true; // false se o Message Content Intent não está ativo no portal
+  }
+
+  /** state.json de versões antigas (avisos globais, um servidor só) -> por servidor. */
+  migrateState() {
+    const s = this.state;
+    const guildOf = channelId => this.client.channels.cache.get(channelId)?.guildId;
+    s.messages = migrateMessages(s.messages, guildOf);
+    if (s.settings.chat || s.settings.voiceStatus) {
+      ({ settings: s.settings, guilds: s.guilds } = migrateSettings(s.settings, s.guilds, {
+        chatGuild: s.settings.chat?.channelId ? guildOf(s.settings.chat.channelId) : '',
+        guildIds: [...this.client.guilds.cache.keys()],
+        homeGuild: this.baseConfig.guildId,
+      }));
+      log('state.json: avisos do /openspeak agora são por servidor (escolhas antigas migradas)');
+    }
+    for (const [guildId, links] of Object.entries(s.links ?? {})) s.guilds[guildId] = { links, ...s.guilds[guildId] };
+    delete s.links;
+    saveState(s);
+  }
+
+  /** Chat e status de voz deste servidor do Discord. */
+  notices(guildId) {
+    return guildNotices(this.config, this.state.guilds[guildId], guildId);
+  }
+
+  saveGuild(guildId, section, values) {
+    const guild = (this.state.guilds[guildId] ??= {});
+    guild[section] = { ...guild[section], ...values };
+    saveState(this.state);
+    // Mexeu no chat (ex.: deu a permissão e escolheu o canal de novo): tenta avisar outra vez.
+    if (section === 'chat') for (const failed of this.chatFailed) if (failed.includes(`|${guildId}|`)) this.chatFailed.delete(failed);
+  }
+
+  /** IDs de canal da config valem em todos os servidores: só usa no servidor do canal. */
+  inGuild(channelId, guildId) {
+    return this.client.channels.cache.get(channelId)?.guildId === guildId;
+  }
+
+  isBotOwner(user) {
+    const owner = this.owner;
+    return Boolean(owner && (owner.members ? owner.members.has(user.id) : owner.id === user.id));
   }
 
   async fetchStreams() {
@@ -209,21 +303,19 @@ class LiveBot {
       await this.finish(key, this.known.get(key));
       this.watched.delete(key);
     }
-    if (this.config.chat.enabled && this.config.chat.channelId) {
-      for (const s of started) await this.announce(s);
-      for (const [key, s] of current) {
-        const before = this.known.get(key);
-        if (before && (before.app !== s.app || before.name !== s.name || before.paused !== s.paused)) await this.refresh(key, s);
-      }
+    for (const [key, s] of current) {
+      const before = this.known.get(key);
+      if (before && (before.app !== s.app || before.name !== s.name || before.paused !== s.paused)) await this.refresh(key, s);
     }
+    // Também avisa as transmissões em andamento num servidor que acabou de ligar o chat.
+    await this.announceAll(current);
     this.known = current;
     this.streams = streams;
     this.stats = stats;
 
-    if (this.config.voiceStatus.enabled) {
-      this.voiceText = voiceStatusText(this.config.voiceStatus, streams, stats);
-      await this.syncVoice();
-    }
+    // Sempre: os servidores com o status de voz desligado simplesmente não têm canais na lista.
+    this.voiceText = voiceStatusText(this.config.voiceStatus, streams, stats);
+    await this.syncVoice();
     if (this.config.presence.enabled) this.updatePresence(streams, stats);
   }
 
@@ -267,73 +359,93 @@ class LiveBot {
     return embed;
   }
 
-  async textChannel() {
-    const channel = await this.client.channels.fetch(this.config.chat.channelId);
-    if (!channel?.isTextBased?.()) throw new Error('chat.channelId não é um canal de texto');
-    return channel;
+  /** Publica cada transmissão nos servidores com o chat ligado que ainda não a avisaram. */
+  async announceAll(current) {
+    if (!current.size) return;
+    for (const guild of this.client.guilds.cache.values()) {
+      const chat = this.notices(guild.id).chat;
+      if (!chat.enabled || !chat.channelId || !this.inGuild(chat.channelId, guild.id)) continue;
+      for (const [key, s] of current) {
+        const failKey = `${key}|${guild.id}|${chat.channelId}`;
+        if (this.state.messages[key]?.posts[guild.id] || this.chatFailed.has(failKey)) continue;
+        if (!(await this.announce(key, s, guild, chat))) this.chatFailed.add(failKey);
+      }
+    }
   }
 
-  async announce(s) {
+  async announce(key, s, guild, chat) {
     try {
-      const channel = await this.textChannel();
-      const mention = this.config.chat.mention?.trim();
+      const channel = await this.client.channels.fetch(chat.channelId);
+      if (!channel?.isTextBased?.()) throw new Error('o canal do chat não é um canal de texto');
+      const mention = chat.mention.trim();
       const message = await channel.send({
         content: mention || undefined,
         embeds: [this.embedFor(s)],
         allowedMentions: mention ? { parse: ['everyone', 'roles', 'users'] } : { parse: [] },
       });
-      this.state.messages[streamKey(s)] = { channelId: channel.id, messageId: message.id, stream: s };
+      const entry = (this.state.messages[key] ??= { stream: s, watchers: [...(this.watched.get(key) ?? [])], posts: {} });
+      entry.stream = s;
+      entry.posts[guild.id] = { channelId: channel.id, messageId: message.id };
       saveState(this.state);
+      return true;
     } catch (err) {
-      log('chat: falha ao avisar:', explain(err));
+      log(`chat em "${guild.name}": falha ao avisar:`, explain(err));
+      return false;
     }
   }
 
-  async message(key) {
-    const saved = this.state.messages[key];
-    if (!saved) return null;
-    const channel = await this.client.channels.fetch(saved.channelId);
-    return channel.messages.fetch(saved.messageId);
+  /** Mensagens publicadas da transmissão, em todos os servidores. */
+  async *posts(key) {
+    for (const post of Object.values(this.state.messages[key]?.posts ?? {})) {
+      try {
+        const channel = await this.client.channels.fetch(post.channelId);
+        yield await channel.messages.fetch(post.messageId);
+      } catch (err) {
+        if (err?.code !== 10008 && err?.code !== 10003) log('chat: aviso publicado não encontrado:', explain(err));
+      }
+    }
   }
 
   async refresh(key, s) {
-    try {
-      const msg = await this.message(key);
-      if (msg) await msg.edit({ embeds: [this.embedFor(s)] });
-      if (this.state.messages[key]) this.state.messages[key].stream = s;
-      saveState(this.state);
-    } catch (err) {
-      log('chat: falha ao atualizar aviso:', explain(err));
+    if (!this.state.messages[key]) return;
+    for await (const msg of this.posts(key)) {
+      await msg.edit({ embeds: [this.embedFor(s)] }).catch(err => log('chat: falha ao atualizar aviso:', explain(err)));
     }
+    this.state.messages[key].stream = s;
+    saveState(this.state);
   }
 
   async finish(key, last) {
     const saved = this.state.messages[key];
     if (!saved) return;
-    const s = last ?? saved?.stream;
+    const s = last ?? saved.stream;
     if (s) log(`encerrou: ${s.owner} — ${appLabel(s)}`);
-    try {
-      const msg = await this.message(key);
-      if (msg && this.config.chat.onEnd === 'delete') await msg.delete();
-      else if (msg && this.config.chat.onEnd === 'edit' && s) {
-        const watchers = [...(saved.watchers ?? []), ...(this.watched.get(key) ?? [])];
-        await msg.edit({ content: null, embeds: [this.embedFor(s, true, watchers)] });
+    const watchers = [...(saved.watchers ?? []), ...(this.watched.get(key) ?? [])];
+    for await (const msg of this.posts(key)) {
+      try {
+        if (this.config.chat.onEnd === 'delete') await msg.delete();
+        else if (this.config.chat.onEnd === 'edit' && s) await msg.edit({ content: null, embeds: [this.embedFor(s, true, watchers)] });
+      } catch (err) {
+        if (err?.code !== 10008) log('chat: falha ao encerrar aviso:', explain(err)); // 10008 = mensagem já apagada
       }
-    } catch (err) {
-      if (err?.code !== 10008) log('chat: falha ao encerrar aviso:', explain(err)); // 10008 = mensagem já apagada
     }
     delete this.state.messages[key];
+    for (const failed of this.chatFailed) if (failed.startsWith(`${key}|`)) this.chatFailed.delete(failed);
     saveState(this.state);
   }
 
   // --------------------------------------------- status do canal de voz
 
-  /** Canal fixo da config, ou os canais de voz com alguém (que não seja bot) conectado. */
+  /** Por servidor com o status de voz ligado: o canal fixo, ou as calls com alguém (que não seja bot). */
   voiceTargets() {
-    if (this.config.voiceStatus.channelId) return [this.config.voiceStatus.channelId];
     const targets = [];
     for (const guild of this.client.guilds.cache.values()) {
-      if (this.config.guildId && guild.id !== this.config.guildId) continue;
+      const voice = this.notices(guild.id).voiceStatus;
+      if (!voice.enabled) continue;
+      if (voice.channelId) {
+        if (this.inGuild(voice.channelId, guild.id)) targets.push(voice.channelId);
+        continue;
+      }
       for (const channel of guild.channels.cache.values()) {
         if (channel.type === ChannelType.GuildVoice && channel.members.some(m => !m.user.bot)) targets.push(channel.id);
       }
@@ -355,10 +467,8 @@ class LiveBot {
         // Mesmo com erro: não insiste a cada consulta, tenta de novo na próxima mudança.
         if (status) this.voiceCurrent.set(channelId, status);
         else this.voiceCurrent.delete(channelId);
-        if (!this.config.voiceStatus.channelId) {
-          this.state.voice = Object.fromEntries(this.voiceCurrent);
-          saveState(this.state);
-        }
+        this.state.voice = Object.fromEntries([...this.voiceCurrent].filter(([, text]) => text !== '\0'));
+        saveState(this.state);
       }
     }).catch(err => log('status do canal de voz:', explain(err)));
     return this.voiceQueue;
@@ -416,6 +526,143 @@ class LiveBot {
     this.client.user.setPresence({ status: live ? 'online' : 'idle', activities: text ? [activity] : [] });
   }
 
+  // ---------------------------------------------- links do X/Twitter
+
+  links(guildId) {
+    return linkSettings(this.state.guilds[guildId]?.links);
+  }
+
+  /** Mensagem nova em algum servidor: corrige os links do X se o servidor ligou. */
+  async onMessage(message) {
+    // Bots e webhooks (inclusive os nossos reenvios) nunca: evita loop.
+    if (!message.inGuild() || message.author.bot || message.webhookId || message.system) return;
+    if (message.type !== MessageType.Default && message.type !== MessageType.Reply) return;
+    const settings = this.links(message.guildId);
+    if (!settings.enabled) return;
+    const { content, links } = rewriteXLinks(message.content, settings.service);
+    if (!links.length) return;
+
+    const channel = message.channel;
+    const thread = channel.isThread();
+    const target = thread ? channel.parent : channel; // o webhook fica no canal pai da thread
+    const me = message.guild.members.me ?? this.client.user;
+    const perms = channel.permissionsFor(me);
+    const has = flag => Boolean(perms?.has(flag));
+    const action = chooseLinkAction({
+      mode: settings.mode,
+      isReply: message.type === MessageType.Reply,
+      hasExtras: message.attachments.size > 0 || message.stickers.size > 0 || Boolean(message.poll),
+      contentLength: content.length,
+      canWebhook: Boolean(target?.fetchWebhooks && target.permissionsFor(me)?.has(PermissionFlagsBits.ManageWebhooks)),
+      canDelete: has(PermissionFlagsBits.ManageMessages),
+      canSend: has(thread ? PermissionFlagsBits.SendMessagesInThreads : PermissionFlagsBits.SendMessages)
+        && has(PermissionFlagsBits.ReadMessageHistory),
+    });
+    if (action === 'webhook' && await this.resend(message, content, target, thread)) return;
+    if (action) await this.replyLinks(message, links, has(PermissionFlagsBits.ManageMessages));
+  }
+
+  /** Modo responder (e plano B do substituir): tira a prévia quebrada e responde, sem mencionar o autor. */
+  async replyLinks(message, links, canSuppress) {
+    if (canSuppress) {
+      try {
+        await message.suppressEmbeds(true);
+      } catch (err) {
+        if (err?.code !== 10008) log('links: falha ao tirar a prévia:', explain(err));
+      }
+    }
+    try {
+      await message.reply({
+        content: links.join('\n'),
+        allowedMentions: { parse: [], repliedUser: false },
+        failIfNotExists: false,
+      });
+    } catch (err) {
+      log('links: falha ao responder:', explain(err));
+    }
+  }
+
+  /** Webhook do bot no canal: reaproveita um que já exista, senão cria um (guardado em cache). */
+  webhookFor(channel) {
+    let pending = this.webhooks.get(channel.id);
+    if (!pending) {
+      pending = (async () => {
+        const existing = (await channel.fetchWebhooks()).find(w => w.owner?.id === this.client.user.id && w.token);
+        return existing ?? channel.createWebhook({ name: 'OpenSpeak links', reason: 'Correção de links do X/Twitter' });
+      })();
+      pending.catch(() => this.webhooks.delete(channel.id)); // tenta de novo na próxima
+      this.webhooks.set(channel.id, pending);
+    }
+    return pending;
+  }
+
+  /**
+   * Modo substituir: reenvia o texto como o autor (nome e avatar dele) e só então
+   * apaga o original, para não perder a mensagem se o envio falhar. false = usar o plano B.
+   */
+  async resend(message, content, target, thread) {
+    const payload = {
+      content,
+      username: webhookName(message.member?.displayName ?? message.author.displayName),
+      avatarURL: (message.member ?? message.author).displayAvatarURL({ size: 256 }),
+      allowedMentions: { parse: [] }, // não pinga @everyone nem ninguém de novo
+      ...(thread ? { threadId: message.channel.id } : {}),
+    };
+    let webhook, sent;
+    for (let attempt = 0; attempt < 2 && !sent; attempt++) {
+      try {
+        webhook = await this.webhookFor(target);
+        sent = await webhook.send(payload);
+      } catch (err) {
+        this.webhooks.delete(target.id);
+        if (err?.code === 10015 && attempt === 0) continue; // webhook apagado por alguém: cria outro
+        log('links: webhook falhou, respondendo em vez disso:', explain(err));
+        return false;
+      }
+    }
+    try {
+      await message.delete();
+      return true;
+    } catch (err) {
+      if (err?.code === 10008) return true; // o autor já apagou
+      log('links: não consegui apagar o original:', explain(err));
+      await webhook.deleteMessage(sent).catch(() => {}); // evita a mensagem duplicada
+      return false;
+    }
+  }
+
+  saveLinks(guildId, change) {
+    this.saveGuild(guildId, 'links', { ...this.links(guildId), ...change });
+  }
+
+  linksText(guildId) {
+    const l = this.links(guildId);
+    const status = !l.enabled ? 'desligado — ligue com `/openspeak links`' : `${LINK_MODE_NAME[l.mode]}, via ${l.service}`;
+    const warn = l.enabled && !this.messageIntent
+      ? '\n⚠️ Sem o **Message Content Intent** no Developer Portal o bot não lê as mensagens: ative e reinicie o bot.' : '';
+    return `${l.enabled ? '🟢' : '⚪'} **Links do X/Twitter**: ${status}${warn}`;
+  }
+
+  async onLinksCommand(interaction, reply) {
+    const change = { enabled: interaction.options.getBoolean('ligado', true) };
+    const mode = interaction.options.getString('modo');
+    const service = interaction.options.getString('servico');
+    if (mode) change.mode = mode;
+    if (service) change.service = service;
+    this.saveLinks(interaction.guildId, change);
+    log(`/openspeak links: ${change.enabled ? 'ligado' : 'desligado'} em "${interaction.guild?.name}" (por ${interaction.user.tag})`);
+
+    const l = this.links(interaction.guildId);
+    const perms = interaction.channel?.permissionsFor?.(this.client.user);
+    const missing = [];
+    if (l.enabled && perms && !perms.has(PermissionFlagsBits.ManageMessages))
+      missing.push('**Gerenciar mensagens** (tirar a prévia / apagar)');
+    if (l.enabled && perms && l.mode === 'substituir' && !perms.has(PermissionFlagsBits.ManageWebhooks))
+      missing.push('**Gerenciar webhooks** (sem isso, respondo em vez de substituir)');
+    const hint = missing.length ? `\nNeste canal falta: ${missing.join(', ')}.` : '';
+    await reply(`${this.linksText(interaction.guildId)}${hint}`);
+  }
+
   // ------------------------------------------------------- /openspeak
 
   /**
@@ -444,21 +691,32 @@ class LiveBot {
     }
   }
 
-  saveSettings(change) {
-    const settings = this.state.settings;
-    for (const [section, values] of Object.entries(change)) settings[section] = { ...settings[section], ...values };
-    this.state.settings = settings;
+  /** Status do bot (global): só no state.settings, valendo para todos os servidores. */
+  savePresence(enabled) {
+    this.state.settings.presence = { ...this.state.settings.presence, enabled };
     saveState(this.state);
-    this.config = applySettings(this.baseConfig, settings);
+    this.config = applySettings(this.baseConfig, this.state.settings);
   }
 
-  describe() {
-    const c = this.config;
-    const line = section => `${c[section].enabled ? '🟢' : '⚪'} **${NOTICE_NAME[section]}**`;
-    const voice = c.voiceStatus.channelId ? `<#${c.voiceStatus.channelId}>` : 'calls com alguém conectado';
-    const chat = c.chat.channelId ? `<#${c.chat.channelId}>` : 'nenhum canal escolhido — use `/openspeak canal`';
+  /** Quem pode mexer no status do bot, que aparece em todos os servidores. */
+  canChangePresence(interaction) {
+    return this.isBotOwner(interaction.user) || Boolean(this.config.guildId && interaction.guildId === this.config.guildId);
+  }
+
+  describe(guildId) {
+    const n = this.notices(guildId);
+    const dot = on => (on ? '🟢' : '⚪');
+    const inHere = id => id && this.inGuild(id, guildId);
+    const chat = inHere(n.chat.channelId) ? `<#${n.chat.channelId}>` : 'nenhum canal escolhido — use `/openspeak canal`';
+    const mention = n.chat.mention ? `, mencionando ${n.chat.mention}` : '';
+    const voice = inHere(n.voiceStatus.channelId) ? `<#${n.voiceStatus.channelId}>` : 'calls com alguém conectado';
     const v = statsVars(this.stats);
-    return [`${line('chat')}: ${chat}`, `${line('voiceStatus')}: ${voice}`, `${line('presence')}`,
+    return ['**Neste servidor**',
+      `${dot(n.chat.enabled)} **${NOTICE_NAME.chat}**: ${chat}${mention}`,
+      `${dot(n.voiceStatus.enabled)} **${NOTICE_NAME.voiceStatus}**: ${voice}`,
+      this.linksText(guildId),
+      '**Em todos os servidores**',
+      `${dot(this.config.presence.enabled)} **${NOTICE_NAME.presence}** (só o dono do bot muda)`,
       `Transmissões ao vivo agora: **${this.streams.length}**`,
       `Servidor: **${v.usuarios}** online, **${v.transmissoes}** transmissões, **${v.assistindo}** assistindo, **${v.mbps}** Mbps`,
     ].join('\n');
@@ -468,11 +726,16 @@ class LiveBot {
     if (interaction.commandName === 'aovivo') return this.onLiveCommand(interaction);
     if (interaction.commandName === 'servidor') return this.onServerCommand(interaction);
     const reply = content => interaction.reply({ content, flags: MessageFlags.Ephemeral, allowedMentions: { parse: [] } });
-    if (this.config.guildId && interaction.guildId !== this.config.guildId)
-      return reply('Os avisos do OpenSpeak estão configurados para outro servidor.');
     if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild))
       return reply('Só quem pode **Gerenciar servidor** configura os avisos.');
     const sub = interaction.options.getSubcommand();
+    const guildId = interaction.guildId;
+    if (sub === 'links') return this.onLinksCommand(interaction, reply);
+    if (sub === 'ver') return reply(this.describe(guildId));
+    // Com guildId na config, os avisos de transmissão ficam só naquele servidor (links valem em todos).
+    const otherGuild = !this.notices(guildId).allowed;
+    const avisoStatus = sub === 'avisos' && interaction.options.getString('aviso') === 'status';
+    if (otherGuild && !avisoStatus) return reply('Os avisos do OpenSpeak estão configurados para outro servidor.');
 
     if (sub === 'canal') {
       const channel = interaction.options.getChannel('canal', true);
@@ -480,33 +743,55 @@ class LiveBot {
       const needed = [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks];
       if (perms && !perms.has(needed))
         return reply(`Não consigo escrever em <#${channel.id}>: preciso de **Ver canal**, **Enviar mensagens** e **Inserir links** lá.`);
-      this.saveSettings({ chat: { channelId: channel.id, enabled: true } });
-      log(`/openspeak: chat em #${channel.name} (por ${interaction.user.tag})`);
+      this.saveGuild(guildId, 'chat', { channelId: channel.id, enabled: true });
+      log(`/openspeak: chat em #${channel.name} de "${interaction.guild?.name}" (por ${interaction.user.tag})`);
+      this.enqueue(() => this.apply(this.streams));
       await reply(`Pronto: vou avisar em <#${channel.id}> quando alguém começar a transmitir.`);
+      return;
+    }
+
+    if (sub === 'voz') {
+      const channel = interaction.options.getChannel('canal');
+      this.saveGuild(guildId, 'voiceStatus', { channelId: channel?.id ?? '', enabled: true });
+      if (channel && !this.voiceCurrent.has(channel.id)) this.voiceCurrent.set(channel.id, '\0'); // limpa status antigo
+      log(`/openspeak: status de voz em ${channel ? `#${channel.name}` : 'calls com gente'} de "${interaction.guild?.name}"`);
+      this.enqueue(() => this.apply(this.streams));
+      await reply(channel ? `Status de voz ligado em <#${channel.id}>.` : 'Status de voz ligado nas calls com alguém conectado.');
+      return;
+    }
+
+    if (sub === 'mencao') {
+      const who = interaction.options.getString('quem', true);
+      const role = interaction.options.getRole('cargo');
+      if (who === 'cargo' && !role) return reply('Escolha o cargo na opção **cargo**.');
+      const mention = who === 'ninguem' ? '' : who === 'cargo' ? `<@&${role.id}>` : who;
+      this.saveGuild(guildId, 'chat', { mention });
+      await reply(mention ? `Os avisos no chat vão mencionar ${mention}.` : 'Os avisos no chat não mencionam ninguém.');
       return;
     }
 
     if (sub === 'avisos') {
       const section = NOTICES[interaction.options.getString('aviso', true)];
       const enabled = interaction.options.getBoolean('ligado', true);
-      this.saveSettings({ [section]: { enabled } });
-      log(`/openspeak: ${NOTICE_NAME[section]} ${enabled ? 'ligado' : 'desligado'} (por ${interaction.user.tag})`);
-      if (section === 'voiceStatus' && !enabled) {
-        this.voiceText = '';
-        this.syncVoice();
-      }
+      if (section === 'presence') {
+        if (!this.canChangePresence(interaction))
+          return reply('O status do bot aparece em todos os servidores: só o dono do bot liga ou desliga.');
+        this.savePresence(enabled);
+      } else this.saveGuild(guildId, section, { enabled });
+      log(`/openspeak: ${NOTICE_NAME[section]} ${enabled ? 'ligado' : 'desligado'} em "${interaction.guild?.name}" (por ${interaction.user.tag})`);
+      if (section === 'voiceStatus' && !enabled) this.syncVoice(); // tira os canais deste servidor da lista: limpa
       if (section === 'presence' && !enabled) {
         this.lastPresence = this.presenceMain = null;
         this.presenceTexts = [];
         this.client.user.setPresence({ status: 'online', activities: [] });
       }
       if (enabled) this.enqueue(() => this.apply(this.streams));
-      const hint = section === 'chat' && enabled && !this.config.chat.channelId ? '\nFalta escolher o canal: `/openspeak canal`.' : '';
+      const chatId = this.notices(guildId).chat.channelId;
+      const hint = section === 'chat' && enabled && !(chatId && this.inGuild(chatId, guildId)) ? '\nFalta escolher o canal: `/openspeak canal`.' : '';
       await reply(`${NOTICE_NAME[section]} ${enabled ? 'ligado' : 'desligado'}.${hint}`);
       return;
     }
 
-    await reply(this.describe());
   }
 
   /** /aovivo: quem está transmitindo (só streams com "Mostrar ao vivo no bot do Discord"). */
@@ -545,26 +830,63 @@ class LiveBot {
   }
 
   async shutdown() {
-    if (!this.config.voiceStatus.enabled) return;
     this.voiceText = '';
     await this.syncVoice().catch(() => {});
   }
 }
 
 const { config, token } = loadConfig();
-// GuildVoiceStates (não é privilegiada): saber quais calls têm gente.
-const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates] });
+let client;
 let bot;
 
-client.once('clientReady', async () => {
+/**
+ * GuildVoiceStates (não é privilegiada): saber quais calls têm gente.
+ * GuildMessages + MessageContent (privilegiada, ativar no Developer Portal): ler
+ * as mensagens para corrigir links do X. Sem ela no portal, o login falha com
+ * "disallowed intents" e o bot conecta de novo sem ler mensagens (os avisos seguem).
+ */
+function createClient(readMessages) {
+  const intents = [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates];
+  if (readMessages) intents.push(GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent);
+  const c = new Client({ intents });
+  c.once('clientReady', () => onReady(c, readMessages).catch(err => log('erro ao iniciar:', err)));
+  c.on('interactionCreate', interaction => {
+    if (!bot || !interaction.isChatInputCommand() || !COMMAND_NAMES.has(interaction.commandName)) return;
+    bot.onCommand(interaction).catch(err => log(`/${interaction.commandName}:`, explain(err)));
+  });
+  c.on('voiceStateUpdate', (before, after) => {
+    if (!bot || before.channelId === after.channelId) return;
+    const voice = bot.notices(after.guild.id).voiceStatus;
+    if (voice.enabled && !voice.channelId) bot.syncVoice().catch(err => log('erro:', err));
+  });
+  // 4014 = Disallowed Intents: o discord.js não reconecta nem sempre rejeita o login.
+  c.on('shardDisconnect', event => {
+    if (readMessages && event?.code === 4014) withoutMessages(c);
+  });
+  c.on('messageCreate', message => {
+    bot?.onMessage(message).catch(err => log('links:', explain(err)));
+  });
+  return c;
+}
+
+async function onReady(client, readMessages) {
   bot = new LiveBot(config, client);
+  bot.messageIntent = readMessages;
   const c = bot.config;
   log(`conectado como ${client.user.tag}; consultando ${new URL('/api/live', c.openspeakUrl)} a cada ${c.pollSeconds} s`);
-  const voice = !c.voiceStatus.enabled ? 'desligado' : c.voiceStatus.channelId ? 'ligado (canal fixo)' : 'ligado (calls com gente)';
-  const chat = !c.chat.enabled ? 'desligado' : c.chat.channelId ? 'ligado' : 'ligado, sem canal (use /openspeak canal)';
-  log(`avisos: status do canal de voz ${voice}, chat ${chat}, status do bot ${c.presence.enabled ? 'ligado' : 'desligado'}`);
-  if (!c.chat.enabled && !c.voiceStatus.enabled && !c.presence.enabled)
-    log('todos os avisos estão desligados: ligue com /openspeak avisos no Discord');
+  try {
+    bot.owner = (await client.application.fetch()).owner;
+  } catch (err) {
+    log('não consegui ver o dono da aplicação:', explain(err));
+  }
+  for (const guild of client.guilds.cache.values()) {
+    const n = bot.notices(guild.id);
+    if (!n.chat.enabled && !n.voiceStatus.enabled) continue;
+    const voice = !n.voiceStatus.enabled ? 'desligado' : n.voiceStatus.channelId ? 'canal fixo' : 'calls com gente';
+    const chat = !n.chat.enabled ? 'desligado' : n.chat.channelId ? 'ligado' : 'sem canal (use /openspeak canal)';
+    log(`avisos em "${guild.name}": chat ${chat}, status de voz ${voice}`);
+  }
+  log(`status do bot ${c.presence.enabled ? 'ligado' : 'desligado'}; ${client.guilds.cache.size} servidor(es)`);
   try {
     await bot.registerCommands();
   } catch (err) {
@@ -583,29 +905,39 @@ client.once('clientReady', async () => {
   await bot.tick();
   setInterval(() => bot.tick(), c.pollSeconds * 1000);
   setInterval(() => bot.rotatePresence(), c.presence.rotateSeconds * 1000);
-});
-
-client.on('interactionCreate', interaction => {
-  if (!bot || !interaction.isChatInputCommand() || !COMMAND_NAMES.has(interaction.commandName)) return;
-  bot.onCommand(interaction).catch(err => log(`/${interaction.commandName}:`, explain(err)));
-});
-
-client.on('voiceStateUpdate', (before, after) => {
-  if (bot?.config.voiceStatus.enabled && !bot.config.voiceStatus.channelId && before.channelId !== after.channelId)
-    bot.syncVoice().catch(err => log('erro:', err));
-});
+  const linkGuilds = Object.values(bot.state.guilds).filter(g => g?.links?.enabled).length;
+  if (!readMessages && linkGuilds)
+    log(`links do X: ligado em ${linkGuilds} servidor(es), mas sem o Message Content Intent não funciona`);
+}
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, async () => {
     log('encerrando');
     await bot?.shutdown();
-    await client.destroy();
+    await client?.destroy();
     process.exit(0);
   });
 }
 
-client.login(token).catch(async err => {
-  console.error('Login no Discord falhou:', err.message);
-  await client.destroy();
-  process.exitCode = 1;
-});
+/** Sem o Message Content Intent no portal: troca o cliente por um que não lê mensagens. */
+async function withoutMessages(failed) {
+  if (client !== failed) return; // já trocado
+  client = null;
+  log('Message Content Intent desligado no Developer Portal: conectando sem ler mensagens (links do X não funcionam)');
+  await failed.destroy();
+  return login(false);
+}
+
+async function login(readMessages) {
+  const c = (client = createClient(readMessages));
+  try {
+    await c.login(token);
+  } catch (err) {
+    if (readMessages && /disallowed intents/i.test(err.message)) return withoutMessages(c);
+    console.error('Login no Discord falhou:', err.message);
+    await c.destroy();
+    process.exitCode = 1;
+  }
+}
+
+login(true);

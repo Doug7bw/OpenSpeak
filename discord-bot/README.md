@@ -15,9 +15,18 @@ quem tem **Gerenciar servidor**; as respostas só você vê):
 
 | Comando | O que faz |
 |---|---|
-| `/openspeak canal canal:#avisos` | Escolhe o canal de texto dos avisos (e liga o chat) |
+| `/openspeak canal canal:#avisos` | Escolhe o canal de texto dos avisos neste servidor (e liga o chat) |
 | `/openspeak avisos aviso:<Chat / Status do canal de voz / Status do bot> ligado:<sim/não>` | Liga ou desliga um aviso |
-| `/openspeak ver` | Mostra o que está ligado e em qual canal (e a carga do servidor) |
+| `/openspeak voz [canal:#call]` | Liga o status de voz: num canal fixo, ou (sem canal) nas calls com gente |
+| `/openspeak mencao quem:<Ninguém / @here / @everyone / cargo> [cargo:@Cargo]` | Quem o aviso no chat menciona |
+| `/openspeak links ligado:<sim/não> [modo] [servico]` | Correção de links do X/Twitter (veja abaixo) |
+| `/openspeak ver` | Mostra o que está ligado neste servidor (e a carga do servidor OpenSpeak) |
+
+**Tudo é por servidor do Discord**: chat (canal e menção), status do canal de
+voz (canal fixo ou automático) e links do X. Cada servidor onde o bot está
+configura os seus. A exceção é o **status do bot**, que é um só e aparece em
+todos: só o dono da aplicação (ou quem administra o servidor do `guildId` da
+config) liga ou desliga.
 
 E dois comandos para qualquer pessoa (também na DM com o bot):
 
@@ -33,12 +42,54 @@ bot. Comandos `/openspeak` antigos, registrados por servidor, são removidos
 para não aparecerem duplicados.
 
 Tudo vem **desligado** por padrão: ligue o que quiser com `/openspeak avisos`
-(ou `"enabled": true` no `config.json`). As escolhas do `/openspeak` ficam no `state.json` e valem por cima do
-`config.json` (que continua sendo o padrão).
+(ou `"enabled": true` no `config.json`). As escolhas do `/openspeak` ficam no
+`state.json` (`guilds`, por servidor; `settings`, o status do bot) e valem por
+cima do `config.json`, que é o padrão de todos os servidores (um `channelId` da
+config só vale no servidor daquele canal). Um `state.json` de versão antiga, com
+os avisos globais, é migrado sozinho: o chat vai para o servidor do canal
+escolhido e o status de voz automático continua ligado onde já estava.
 
 Quem transmite escolhe por transmissão: **Configurações avançadas → "Mostrar ao
 vivo no bot do Discord"** (ligado por padrão), no app nativo e no cliente web.
 Transmissões com a opção desligada não aparecem em lugar nenhum.
+
+## Links do X/Twitter
+
+O Discord costuma mostrar a prévia de posts do X quebrada. Com
+`/openspeak links ligado:sim`, o bot troca links de post
+(`x.com`/`twitter.com`, com ou sem `www.`/`mobile.`, formato
+`/usuario/status/ID`) por `fxtwitter.com` (ou `fixupx.com` / `vxtwitter.com`
+com `servico:`), mantendo o caminho (`/photo/1`…) e tirando o rastreio
+(`?s=20`, `?t=…`). Vale **por servidor** e vem **desligado** em todos; a escolha
+fica no `state.json` (`guilds.<servidor>.links`), e não depende do `guildId` da config.
+
+| `modo:` | O que faz |
+|---|---|
+| **Responder** (padrão) | Tira a prévia quebrada da mensagem original (*Gerenciar mensagens*) e responde com o(s) link(s) corrigido(s), sem mencionar o autor |
+| **Substituir** | Apaga a mensagem e reenvia o texto inteiro, já corrigido, por um webhook com o nome e o avatar do autor — parece que ele mandou o link do fxtwitter direto |
+
+No modo substituir:
+
+- um webhook por canal, reaproveitado (o bot procura um dele antes de criar
+  outro e guarda em cache; se alguém o apagar, cria de novo); em threads o
+  webhook fica no canal pai e o envio vai para a thread;
+- todas as menções são bloqueadas no reenvio (`@everyone`, cargos e pessoas não
+  são pingados de novo);
+- o original só é apagado depois que o reenvio deu certo;
+- cai no modo responder quando a mensagem é **resposta** a outra (o webhook
+  perderia a referência), tem **anexo**, figurinha ou enquete, ficaria com mais
+  de 2000 caracteres, ou falta **Gerenciar webhooks** / **Gerenciar mensagens**.
+
+Mensagens de bots e de webhooks são ignoradas (sem loop), e links entre `< >`
+(o autor pediu sem prévia) ficam como estão. Sem permissão para responder no
+canal, o bot só registra no log.
+
+**Precisa do _Message Content Intent_**: no Developer Portal → **Bot** →
+*Privileged Gateway Intents* → ative **Message Content Intent**. Sem ele, o bot
+conecta assim mesmo (os avisos de transmissão seguem funcionando), avisa no log
+e no `/openspeak ver`, e não corrige links. Permissões extras: **Gerenciar
+mensagens** e, para o modo substituir, **Gerenciar webhooks** (além de Ver
+canais, Enviar mensagens, Enviar mensagens em threads e Ler histórico).
 
 ## Como funciona
 
@@ -86,14 +137,23 @@ considera que ninguém está ao vivo e encerra os avisos.
 ## Instalação
 
 1. Em <https://discord.com/developers/applications> crie uma aplicação →
-   **Bot** → copie o token. Nenhuma *privileged intent* é necessária.
-2. Convide o bot (OAuth2 → URL Generator → escopos `bot` e `applications.commands`) com as permissões:
+   **Bot** → copie o token. Para os avisos nenhuma *privileged intent* é
+   necessária; para corrigir links do X, ative o **Message Content Intent**.
+2. Convide o bot (OAuth2 → URL Generator → escopos `bot` e `applications.commands`) com as permissões
+   abaixo — todas juntas dão o inteiro **`281750391712784`**:
+
+   ```text
+   https://discord.com/oauth2/authorize?client_id=1559719687493910620&scope=bot+applications.commands&permissions=281750391712784
+   ```
+
    - **Ver canais**, **Enviar mensagens**, **Inserir links**, **Ler histórico de
      mensagens** (aviso no chat, que é editado ao terminar;
      **Mencionar @everyone** se usar `mention` com @here/@everyone/cargo);
    - **Definir status do canal de voz** e **Gerenciar canais** nos canais de voz
      (o Discord exige *Gerenciar canais* para quem não está conectado na call).
-     No modo automático, dê essas permissões a um cargo do bot no servidor todo.
+     No modo automático, dê essas permissões a um cargo do bot no servidor todo;
+   - links do X: **Gerenciar mensagens**, **Gerenciar webhooks** (modo
+     substituir) e **Enviar mensagens em threads**.
 3. IDs de canal são opcionais: o canal do chat se escolhe com `/openspeak canal`
    e o status de voz vai sozinho para as calls com gente. Para fixar um canal na
    config, ative o Modo Desenvolvedor (Configurações → Avançado) e use o botão
@@ -118,7 +178,7 @@ editá-las mesmo depois de reiniciar).
 {
   "openspeakUrl": "https://openspeak.duckdns.org", // servidor OpenSpeak (http/https, sem /ws)
   "pollSeconds": 15,                                // 5 a 300
-  "guildId": "",                                    // opcional: limita o automático a um servidor do Discord
+  "guildId": "",                                    // opcional: avisos de transmissão só neste servidor do Discord (links valem em todos)
 
   "voiceStatus": {
     "enabled": false,

@@ -191,6 +191,70 @@ export function applySettings(config, settings = {}) {
   return out;
 }
 
+/** Avisos configuráveis por servidor do Discord (o status do bot é um só, global). */
+export const GUILD_NOTICES = ['chat', 'voiceStatus'];
+
+/**
+ * Avisos de um servidor do Discord: o config.json é o padrão (só nos servidores
+ * permitidos por `guildId`; IDs de canal da config só valem no servidor do canal,
+ * o que o bot confere ao usar) e as escolhas do /openspeak naquele servidor vão por cima.
+ */
+export function guildNotices(config, saved = {}, guildId) {
+  const allowed = !config.guildId || config.guildId === guildId;
+  const chat = { enabled: !!config.chat.enabled, channelId: config.chat.channelId || '', mention: config.chat.mention || '' };
+  const voiceStatus = { enabled: !!config.voiceStatus.enabled, channelId: config.voiceStatus.channelId || '' };
+  const c = saved?.chat ?? {}, v = saved?.voiceStatus ?? {};
+  if (typeof c.enabled === 'boolean') chat.enabled = c.enabled;
+  if (typeof c.channelId === 'string') chat.channelId = c.channelId;
+  if (typeof c.mention === 'string') chat.mention = c.mention;
+  if (typeof v.enabled === 'boolean') voiceStatus.enabled = v.enabled;
+  if (typeof v.channelId === 'string') voiceStatus.channelId = v.channelId;
+  if (!allowed) chat.enabled = voiceStatus.enabled = false;
+  return { allowed, chat, voiceStatus };
+}
+
+/**
+ * Formato antigo das mensagens publicadas ({channelId, messageId} por stream,
+ * um servidor só) -> novo ({stream, watchers, posts: {servidor: {channelId, messageId}}}).
+ * `guildOf(canal)` diz o servidor; sem ele a chave vira o canal (só serve para editar no fim).
+ */
+export function migrateMessages(messages = {}, guildOf = () => undefined) {
+  const out = {};
+  for (const [key, m] of Object.entries(messages)) {
+    if (!m || typeof m !== 'object') continue;
+    if (m.posts && typeof m.posts === 'object') out[key] = m;
+    else if (m.channelId && m.messageId)
+      out[key] = { stream: m.stream, watchers: m.watchers ?? [],
+        posts: { [guildOf(m.channelId) ?? m.channelId]: { channelId: m.channelId, messageId: m.messageId } } };
+  }
+  return out;
+}
+
+/**
+ * Escolhas antigas do /openspeak (globais: state.settings.chat/voiceStatus) ->
+ * por servidor. `chatGuild`: servidor do canal do chat antigo (ou null);
+ * `guildIds`: servidores onde o bot está. O status de voz automático valia em
+ * todos, então continua ligado em todos. Devolve {settings, guilds} novos.
+ */
+export function migrateSettings(settings = {}, guilds = {}, { chatGuild, guildIds = [], homeGuild = '' } = {}) {
+  const out = structuredClone(guilds);
+  const rest = { ...settings };
+  const put = (guildId, section, values) => {
+    out[guildId] = { ...out[guildId] };
+    out[guildId][section] = { ...values, ...out[guildId][section] }; // não sobrescreve o que já é por servidor
+  };
+  if (settings.chat) {
+    const target = chatGuild || homeGuild || (guildIds.length === 1 ? guildIds[0] : '');
+    if (target) put(target, 'chat', settings.chat);
+    delete rest.chat;
+  }
+  if (typeof settings.voiceStatus?.enabled === 'boolean') {
+    for (const guildId of homeGuild ? [homeGuild] : guildIds) put(guildId, 'voiceStatus', { enabled: settings.voiceStatus.enabled });
+  }
+  delete rest.voiceStatus;
+  return { settings: rest, guilds: out };
+}
+
 /** Normaliza a config e devolve a lista de problemas (vazia = ok). */
 export function checkConfig(config) {
   const problems = [];
