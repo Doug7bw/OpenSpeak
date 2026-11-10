@@ -81,7 +81,7 @@ export function renderBuild({ hero, rank, ranked, items, selected }) {
   );
   // Build publicada: no jogo se acha pelo ID. Código só para build sem ID (montada na hora).
   // No PC, clique duplo no número seleciona só ele (o Discord não tem clicar-para-copiar).
-  if (b.hero_build_id) embed.addFields({ name: '🔎 ID para buscar no jogo', value: `**`${b.hero_build_id}`**` });
+  if (b.hero_build_id) embed.addFields({ name: '🔎 ID para buscar no jogo', value: '**`' + b.hero_build_id + '`**' });
   const cats = (b.details?.mod_categories ?? []).filter(c => c.mods?.length);
   for (const c of cats.slice(0, 7)) {
     const list = c.mods.map(m => itemLabel(items, m.ability_id)).join(' → ');
