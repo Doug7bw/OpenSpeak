@@ -105,15 +105,40 @@ export function renderBuild({ hero, rank, ranked, items, selected }) {
   return { embeds: [embed], components: ranked.length > 1 ? [row(menu), buttons] : [buttons] };
 }
 
-/** Código para colar no jogo (privado). Até 2000 caracteres vai no texto; acima disso, num arquivo. */
-export function renderCode({ hero, build, code }) {
-  const embed = new EmbedBuilder().setColor(COLOR)
-    .setTitle(`📋 ${clip(build.name || 'Build', 200)}`)
-    .setDescription(`Copie o código${code.length <= MAX_CONTENT ? ' acima (no celular: segure a mensagem → Copiar texto)' : ' do arquivo anexado'} `
-      + `e cole no jogo, na tela de builds ${hero ? `do ${hero.name} ` : ''}(importar build).`);
-  if (code.length <= MAX_CONTENT) return { content: code, embeds: [embed] };
+/**
+ * Código para colar no jogo (privado). Até 2000 caracteres vai no texto da
+ * mensagem. Build muito anotada passa disso: aí o texto leva o código **sem as
+ * anotações** (fácil de copiar) e o completo vai num arquivo.
+ */
+export function renderCode({ hero, build, code, lite }) {
+  const where = `cole no jogo, na tela de builds ${hero ? `do ${hero.name} ` : ''}(importar build).`;
+  const copy = '(no celular: segure a mensagem → Copiar texto)';
+  const embed = new EmbedBuilder().setColor(COLOR).setTitle(`📋 ${clip(build.name || 'Build', 200)}`);
+  if (code.length <= MAX_CONTENT) {
+    embed.setDescription(`Copie o código acima ${copy} e ${where}`);
+    return { content: code, embeds: [embed] };
+  }
   const file = new AttachmentBuilder(Buffer.from(code), { name: `build-${build.hero_build_id}.txt` });
+  if (lite && lite.length <= MAX_CONTENT) {
+    embed.setDescription(`Esta build é muito anotada, então o código completo não cabe numa mensagem.\n\n`
+      + `• **Acima:** o código **sem as anotações**, com os mesmos itens e habilidades. Copie ${copy} e ${where}\n`
+      + `• **No arquivo:** o código completo, com as anotações de cada item.`);
+    return { content: lite, embeds: [embed], files: [file] };
+  }
+  embed.setDescription(`Copie o código do arquivo anexado e ${where}`);
   return { embeds: [embed], files: [file] };
+}
+
+/** A mesma build sem as anotações (itens, seções e habilidades iguais): código bem menor. */
+export function withoutAnnotations(build) {
+  return {
+    ...build,
+    description: '',
+    details: build.details && {
+      ...build.details,
+      mod_categories: (build.details.mod_categories ?? []).map(c => ({ ...c, description: '', mods: (c.mods ?? []).map(m => ({ ...m, annotation: undefined })) })),
+    },
+  };
 }
 
 /**

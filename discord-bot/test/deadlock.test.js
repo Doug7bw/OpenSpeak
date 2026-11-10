@@ -145,3 +145,14 @@ test('findHero aceita nome em inglês, português, apelido e ID', async () => {
   assert.equal(await d.findHero('zzz'), null);
   assert.deepEqual((await d.heroChoices('set')).map(c => c.name), ['Seven (Sete)']);
 });
+
+test('build muito anotada: texto leva o código sem anotações e o arquivo, o completo', async () => {
+  const { withoutAnnotations } = await import('../src/dlview.js');
+  const lite = withoutAnnotations(fixture.hero_build);
+  assert.ok(lite.details.mod_categories.every(c => c.mods.every(m => !m.annotation)));
+  assert.equal(lite.details.mod_categories.flatMap(c => c.mods).length, fixture.hero_build.details.mod_categories.flatMap(c => c.mods).length);
+  assert.ok(fixture.hero_build.details.mod_categories[0].mods.some(m => m.annotation)); // o original continua intacto
+  const msg = renderCode({ hero, build: fixture.hero_build, code: 'A'.repeat(2500), lite: 'KLUv' });
+  assert.equal(msg.content, 'KLUv');
+  assert.equal(msg.files.length, 1);
+});
