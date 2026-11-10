@@ -157,13 +157,13 @@ test('build muito anotada: texto leva o código sem anotações e o arquivo, o c
   assert.equal(msg.files.length, 1);
 });
 
-test('build publicada mostra o ID e o botão Copiar ID; sem ID, o código', () => {
+test('build publicada mostra o ID (sem botão de código); sem ID, o botão do código', () => {
   const allItems = new Map();
   const mk = id => rankBuilds([{ hero_build_id: 5, matches: 1000, wins: 550 }],
     new Map([[5, { hero_build: { ...fixture.hero_build, hero_build_id: id } }]]), allItems, { minMatches: 10 });
   const published = renderBuild({ hero, rank: 'todos', ranked: mk(722319), items: allItems });
   assert.ok(published.embeds[0].toJSON().fields.some(f => f.value.includes('722319')));
-  assert.equal(published.components.at(-1).toJSON().components[0].custom_id, 'dl:id:722319');
+  assert.ok(!published.components.at(-1).toJSON().components.some(c => /^dl:(id|code):/.test(c.custom_id ?? '')));
   const unpublished = renderBuild({ hero, rank: 'todos', ranked: mk(0), items: allItems });
   assert.match(unpublished.components.at(-1).toJSON().components[0].custom_id, /^dl:code:/);
 });

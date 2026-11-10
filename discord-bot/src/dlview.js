@@ -80,7 +80,8 @@ export function renderBuild({ hero, rank, ranked, items, selected }) {
     { name: '📝 Anotações', value: current.annotated ? `${Math.round(current.annotated * 100)}% dos itens` : 'sem anotações', inline: true },
   );
   // Build publicada: no jogo se acha pelo ID. Código só para build sem ID (montada na hora).
-  if (b.hero_build_id) embed.addFields({ name: '🔎 ID para buscar no jogo', value: `**${b.hero_build_id}**` });
+  // No PC, clique duplo no número seleciona só ele (o Discord não tem clicar-para-copiar).
+  if (b.hero_build_id) embed.addFields({ name: '🔎 ID para buscar no jogo', value: `**`${b.hero_build_id}`**` });
   const cats = (b.details?.mod_categories ?? []).filter(c => c.mods?.length);
   for (const c of cats.slice(0, 7)) {
     const list = c.mods.map(m => itemLabel(items, m.ability_id)).join(' → ');
@@ -99,9 +100,8 @@ export function renderBuild({ hero, rank, ranked, items, selected }) {
       default: c.id === current.id,
     })));
   const buttons = row(
-    b.hero_build_id
-      ? new ButtonBuilder().setCustomId(`dl:id:${b.hero_build_id}`).setLabel('Copiar ID').setEmoji('🔎').setStyle(ButtonStyle.Primary)
-      : new ButtonBuilder().setCustomId(`dl:code:${current.id}`).setLabel('Código para o jogo').setEmoji('📋').setStyle(ButtonStyle.Primary),
+    // Código só para build sem ID (montada na hora); publicada se acha pelo ID, já no embed.
+    ...(b.hero_build_id ? [] : [new ButtonBuilder().setCustomId(`dl:code:${current.id}`).setLabel('Código para o jogo').setEmoji('📋').setStyle(ButtonStyle.Primary)]),
     new ButtonBuilder().setCustomId(`dl:notes:${current.id}:${hero.id}`).setLabel('Ver anotações').setEmoji('📝').setStyle(ButtonStyle.Secondary)
       .setDisabled(!current.annotated),
     new ButtonBuilder().setCustomId(`dl:counter:${hero.id}:${rank}`).setLabel('Counters').setEmoji('🛡️').setStyle(ButtonStyle.Secondary),
