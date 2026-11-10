@@ -75,7 +75,7 @@ function baseEmbed(v, title, on = true) {
   if (v.guild?.name) embed.setAuthor({ name: v.guild.name, iconURL: v.guild.iconURL || undefined });
   if (v.botAvatar) embed.setThumbnail(v.botAvatar);
   const live = v.live > 0 ? `🔴 ${v.live} ao vivo` : 'Ninguém ao vivo';
-  embed.setFooter({ text: `OpenSpeak · ${live} · ${v.stats.usuarios} online`, iconURL: v.botAvatar || undefined });
+  embed.setFooter({ text: `Frisquila · OpenSpeak: ${live}, ${v.stats.usuarios} online`, iconURL: v.botAvatar || undefined });
   return embed;
 }
 
@@ -102,7 +102,7 @@ function linksSummary(l) {
 
 const spacer = { name: '​', value: '​', inline: true };
 
-/** Painel do /openspeak: `page` é uma das chaves de PAGES; `v` vem do bot (panelView). */
+/** Painel do /painel: `page` é uma das chaves de PAGES; `v` vem do bot (panelView). */
 export function renderPanel(page, v) {
   if (!PAGES[page]) page = 'inicio';
   const nav = row(pageSelect(page));
@@ -194,7 +194,7 @@ export function renderPanel(page, v) {
   }
 
   // Visão geral: um resumo por aviso e um botão de liga/desliga para cada.
-  const embed = baseEmbed(v, 'Painel do OpenSpeak')
+  const embed = baseEmbed(v, 'Painel do Frisquila')
     .setDescription(describe(v, [blocked,
       'Ligue e desligue cada recurso nos botões. Para escolher canal, menção, modo e outros detalhes, use o menu de seções.'].filter(Boolean).join('\n\n')))
     .addFields(

@@ -1,4 +1,8 @@
-# Bot do Discord do OpenSpeak
+# Frisquila: bot do Discord do servidor
+
+O Frisquila avisa quem está ao vivo no OpenSpeak, corrige links do X/Twitter e
+responde sobre Deadlock (builds com código para colar no jogo, counters e stats).
+
 
 Avisa no Discord quando alguém está transmitindo no OpenSpeak — **quem** está
 ao vivo e **qual app** (o programa da janela transmitida, ou "Tela inteira" /
@@ -14,12 +18,13 @@ Tudo se configura pelo próprio Discord, num **painel com botões e menus**:
 
 | Comando | Quem | O que faz |
 |---|---|---|
-| `/openspeak` | quem tem **Gerenciar servidor** | Abre o painel deste servidor (só você vê). `secao:` abre direto numa seção |
+| `/painel` | quem tem **Gerenciar servidor** | Abre o painel deste servidor (só você vê). `secao:` abre direto numa seção |
 | `/links` | qualquer pessoa | Painel pessoal: ativar ou desativar a correção dos **seus** links do X |
 | `/aovivo` | qualquer pessoa (também na DM) | Quem está transmitindo agora: app, canal, espectadores e há quanto tempo |
 | `/servidor` | qualquer pessoa (também na DM) | Usuários online, transmissões, quantos assistem e o tráfego do servidor |
+| `/build`, `/counter`, `/heroi` | qualquer pessoa (também na DM) | Deadlock: veja [Deadlock](#deadlock) |
 
-O painel do `/openspeak` abre numa **visão geral** (um resumo de cada recurso,
+O painel do `/painel` abre numa **visão geral** (um resumo de cada recurso,
 com um botão verde/cinza para ligar e desligar) e tem um menu de seções:
 
 | Seção | Ajustes |
@@ -43,10 +48,10 @@ config) liga ou desliga.
 Os comandos são registrados como **globais** (um por vez, sem apagar outros
 comandos da aplicação, como o de abrir a atividade): é isso que faz o Discord
 mostrar o selo **"Supports Slash Commands"** e a lista de comandos no perfil do
-bot. Comandos `/openspeak` antigos, registrados por servidor, são removidos
+bot. Comandos `/painel` antigos (o painel agora é `/painel`) são removidos
 para não aparecerem duplicados.
 
-Tudo vem **desligado** por padrão: ligue o que quiser no painel do `/openspeak`
+Tudo vem **desligado** por padrão: ligue o que quiser no painel do `/painel`
 (ou `"enabled": true` no `config.json`). As escolhas do painel ficam no
 `state.json` (`guilds`, por servidor; `settings`, o status do bot) e valem por
 cima do `config.json`, que é o padrão de todos os servidores (um `channelId` da
@@ -61,7 +66,7 @@ Transmissões com a opção desligada não aparecem em lugar nenhum.
 ## Links do X/Twitter
 
 O Discord costuma mostrar a prévia de posts do X quebrada. Ligando em
-`/openspeak` → 🔗 Links do X/Twitter, o bot troca links de post
+`/painel` → 🔗 Links do X/Twitter, o bot troca links de post
 (`x.com`/`twitter.com`, com ou sem `www.`/`mobile.`, formato
 `/usuario/status/ID`) por `fxtwitter.com` (ou `fixupx.com` / `vxtwitter.com`
 no painel), mantendo o caminho (`/photo/1`…) e tirando o rastreio
@@ -111,6 +116,41 @@ conecta assim mesmo (os avisos de transmissão seguem funcionando), avisa no log
 e no painel, e não corrige links. Permissões extras: **Gerenciar
 mensagens** e, para o modo substituir, **Gerenciar webhooks** (além de Ver
 canais, Enviar mensagens, Enviar mensagens em threads e Ler histórico).
+
+## Deadlock
+
+Dados da [deadlock-api.com](https://deadlock-api.com) (pública, sem chave), dos
+últimos 14 dias (o patch atual). Os três comandos têm autocomplete do herói
+(nome em inglês ou português: "Seven" ou "Sete", "Haze" ou "Bruma") e a opção
+`rank` (Initiate a Alchemist, Arcanist a Emissary, Archon a Oracle, Phantom ou
+acima; padrão: todos).
+
+| Comando | O que mostra |
+|---|---|
+| `/build heroi:Seven` | A melhor build publicada agora: itens por seção, **da esquerda para a direita** como no jogo, ordem de habilidades, win rate e partidas, quando foi atualizada. Botões: **Código para o jogo**, **Ver anotações** (item a item) e **Counters**; menu com as outras 4 melhores |
+| `/counter heroi:Billy` | Quem mais ganha do herói e de quem ele mais ganha, com o número de partidas |
+| `/heroi heroi:Haze` | Win rate (e posição entre os heróis), pick rate e médias por partida |
+
+**Como a build é escolhida.** O `hero-build-stats` diz, para cada build
+publicada, quantas partidas e vitórias teve quem **começou a partida com ela**
+no período. O bot pega as 15 mais jogadas e ordena pelo limite inferior do
+intervalo de Wilson (win rate "garantido" pelo número de partidas), com:
+
+- corte de partidas: pelo menos 5% das da build mais jogada (e 300, ou 100 com
+  rank filtrado), para não premiar sorte de poucos jogos;
+- bônus para builds **anotadas** (o que cada item faz e quando comprar);
+- castigo para builds em idiomas que o servidor não lê (fora inglês/português)
+  e para as que têm itens que saíram do jogo.
+
+**Código para o jogo.** É o mesmo formato que o jogo exporta: base64 de um zstd
+de um protobuf `CMsgHeroBuild` (`src/buildcode.js`; o teste confere byte a byte
+com um código exportado pelo jogo). O jogo só exige o `hero_build_id` (como o
+bot usa builds publicadas, ele é o ID real). Acima de 2000 caracteres o código
+vai num arquivo `.txt`. Com Node antes do 22.15 (sem zstd nativo) o bot gera um
+zstd sem compressão, que o jogo também lê (só fica maior); recomendado Node 22+.
+
+Cache de 1 hora para estatísticas e builds (6 horas para heróis e itens) e no
+máximo 4 consultas ao mesmo tempo, como a API pede.
 
 ## Como funciona
 
@@ -175,7 +215,7 @@ considera que ninguém está ao vivo e encerra os avisos.
      No modo automático, dê essas permissões a um cargo do bot no servidor todo;
    - links do X: **Gerenciar mensagens**, **Gerenciar webhooks** (modo
      substituir) e **Enviar mensagens em threads**.
-3. IDs de canal são opcionais: o canal do chat se escolhe no painel do `/openspeak`
+3. IDs de canal são opcionais: o canal do chat se escolhe no painel do `/painel`
    e o status de voz vai sozinho para as calls com gente. Para fixar um canal na
    config, ative o Modo Desenvolvedor (Configurações → Avançado) e use o botão
    direito no canal → **Copiar ID**.
@@ -197,7 +237,7 @@ editá-las mesmo depois de reiniciar).
 
 ```jsonc
 {
-  "openspeakUrl": "https://openspeak.duckdns.org", // servidor OpenSpeak (http/https, sem /ws)
+  "openspeakUrl": "https://painel.duckdns.org", // servidor OpenSpeak (http/https, sem /ws)
   "pollSeconds": 15,                                // 5 a 300
   "guildId": "",                                    // opcional: avisos de transmissão só neste servidor do Discord (links valem em todos)
 
@@ -210,7 +250,7 @@ editá-las mesmo depois de reiniciar).
   },
   "chat": {
     "enabled": false,
-    "channelId": "",                                // canal de texto; vazio = escolher no painel do /openspeak
+    "channelId": "",                                // canal de texto; vazio = escolher no painel do /painel
     "mention": "",                                  // ex.: "@here" ou "<@&ID_DO_CARGO>"
     "onEnd": "edit"                                 // edit (marca como encerrada, com a duração, quem assistiu e, no SFU, os dados), delete ou keep
   },
@@ -244,14 +284,14 @@ Os números vêm do campo `stats` do `/api/live`, só contagens agregadas.
 
 **Status do bot**: o texto de quem está ao vivo e o da carga do servidor
 (`server`) se alternam a cada `rotateSeconds`; quando alguém começa a
-transmitir, aparece na hora. Sem ninguém ao vivo o status fica parado: mostra
-a carga do servidor se há gente conectada, senão o texto `idle`. Com `type: "custom"` o Discord mostra só o texto;
+transmitir, aparece na hora. Sem ninguém ao vivo o status fica **sem texto** (só
+a bolinha de ausente); o `idle` da config não é mais usado. Com `type: "custom"` o Discord mostra só o texto;
 com `playing`/`watching`/`listening`/`competing` aparece como
 "Jogando …", "Assistindo …", "Ouvindo …" ou "Competindo em …".
 
 ## Rodando na VM junto do servidor
 
-Exemplo de serviço systemd (`/etc/systemd/system/openspeak-bot.service`):
+Exemplo de serviço systemd (`/etc/systemd/system/painel-bot.service`):
 
 ```ini
 [Unit]
@@ -259,7 +299,7 @@ Description=Bot do Discord do OpenSpeak
 After=network-online.target
 
 [Service]
-WorkingDirectory=/opt/openspeak/discord-bot
+WorkingDirectory=/opt/painel/discord-bot
 Environment=DISCORD_TOKEN=seu-token
 ExecStart=/usr/bin/node src/bot.js
 Restart=always

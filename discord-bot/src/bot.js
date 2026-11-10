@@ -1,10 +1,10 @@
-// Bot do Discord do OpenSpeak: consulta o GET /api/live do servidor e avisa quem
+// Frisquila, o bot do Discord do servidor: consulta o GET /api/live do servidor e avisa quem
 // está transmitindo (e qual app) no status do canal de voz, num canal de texto e
 // no status do próprio bot. Cada aviso liga/desliga na config; quem transmite
 // escolhe por stream ("Mostrar ao vivo no bot do Discord", configurações avançadas).
 //
 // Também corrige links do X/Twitter (desligado por padrão, liga por servidor com
-// /openspeak links): troca por fxtwitter.com para o Discord mostrar a prévia certa.
+// /painel links): troca por fxtwitter.com para o Discord mostrar a prévia certa.
 //
 // Uso: DISCORD_TOKEN=... node src/bot.js   (config em ./config.json ou OPENSPEAK_BOT_CONFIG)
 
@@ -22,6 +22,9 @@ import {
 } from './live.js';
 import { startWebhook } from './webhook.js';
 import { PAGES, openButtonRow, renderPanel, renderUserLinks } from './panel.js';
+import { buildCode } from './buildcode.js';
+import { DeadlockData, RANKS } from './deadlock.js';
+import { renderBuild, renderCode, renderCounters, renderHero, renderNotes } from './dlview.js';
 import { chooseLinkAction, linkSettings, linksApplyTo, rewriteXLinks, webhookName } from './xlinks.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -61,8 +64,8 @@ function loadState() {
     return {
       messages: state.messages && typeof state.messages === 'object' ? state.messages : {},
       voice: state.voice && typeof state.voice === 'object' ? state.voice : {}, // canal -> status escrito
-      settings: state.settings && typeof state.settings === 'object' ? state.settings : {}, // escolhas do /openspeak
-      // Por servidor do Discord: { chat, voiceStatus, links } (escolhas do /openspeak naquele servidor).
+      settings: state.settings && typeof state.settings === 'object' ? state.settings : {}, // escolhas do /painel
+      // Por servidor do Discord: { chat, voiceStatus, links } (escolhas do /painel naquele servidor).
       guilds: state.guilds && typeof state.guilds === 'object' ? state.guilds : {},
       links: state.links, // formato antigo (só migração)
       // Por usuário do Discord: { links: true/false } (escolha do /links; vale em todos os servidores).
@@ -90,10 +93,10 @@ function explain(err) {
   return err?.message ?? String(err);
 }
 
-/** /openspeak: abre o painel de configuração deste servidor (tudo por botões e menus). */
+/** /painel: abre o painel de configuração deste servidor (tudo por botões e menus). */
 const ADMIN_COMMAND = new SlashCommandBuilder()
-  .setName('openspeak')
-  .setDescription('Painel do bot: avisos de transmissão, status de voz e links do X')
+  .setName('painel')
+  .setDescription('Painel do Frisquila: avisos de transmissão, status de voz e links do X')
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
   .setContexts(InteractionContextType.Guild)
   .addStringOption(opt => opt
@@ -102,6 +105,21 @@ const ADMIN_COMMAND = new SlashCommandBuilder()
 
 /** Comandos para qualquer pessoa (também na DM com o bot). */
 const PUBLIC_CONTEXTS = [InteractionContextType.Guild, InteractionContextType.BotDM];
+/** /build, /counter e /heroi: herói com autocomplete e rank opcional. */
+function deadlockCommands() {
+  const make = (name, description) => new SlashCommandBuilder().setName(name).setDescription(description)
+    .setContexts(...PUBLIC_CONTEXTS)
+    .addStringOption(opt => opt.setName('heroi').setDescription('Herói (nome em inglês ou português)').setRequired(true).setAutocomplete(true))
+    .addStringOption(opt => opt.setName('rank').setDescription('Filtrar por rank (padrão: todos)')
+      .addChoices(...Object.entries(RANKS).map(([value, r]) => ({ name: r.label, value }))));
+  return [
+    make('build', 'Deadlock: melhor build do herói agora, com anotações e código para colar no jogo'),
+    make('counter', 'Deadlock: quem ganha do herói e de quem ele ganha'),
+    make('heroi', 'Deadlock: win rate, pick rate e médias do herói no patch'),
+  ];
+}
+const DEADLOCK_COMMANDS = new Set(['build', 'counter', 'heroi']);
+
 const COMMANDS = [
   ADMIN_COMMAND,
   new SlashCommandBuilder().setName('aovivo').setDescription('Quem está transmitindo no OpenSpeak agora')
@@ -110,8 +128,11 @@ const COMMANDS = [
     .setContexts(...PUBLIC_CONTEXTS),
   new SlashCommandBuilder().setName('links').setDescription('Ativar ou desativar a correção dos seus links do X/Twitter (fxtwitter)')
     .setContexts(...PUBLIC_CONTEXTS),
+  ...deadlockCommands(),
 ];
 const COMMAND_NAMES = new Set(COMMANDS.map(c => c.name));
+/** Comandos antigos que o bot apaga ao iniciar (o painel se chamava "openspeak"). */
+const RETIRED_COMMANDS = ['openspeak'];
 
 /** Tipo da atividade no status do bot (config presence.type). */
 const ACTIVITY_TYPE = {
@@ -162,6 +183,7 @@ class LiveBot {
     this.linkReplies = new Map();
     this.deletedOriginals = new Set();
     this.handledEdits = new Set();
+    this.dl = new DeadlockData({ log }); // dados de Deadlock (deadlock-api.com), com cache
     this.messageIntent = true; // false se o Message Content Intent não está ativo no portal
   }
 
@@ -176,7 +198,7 @@ class LiveBot {
         guildIds: [...this.client.guilds.cache.keys()],
         homeGuild: this.baseConfig.guildId,
       }));
-      log('state.json: avisos do /openspeak agora são por servidor (escolhas antigas migradas)');
+      log('state.json: avisos do /painel agora são por servidor (escolhas antigas migradas)');
     }
     for (const [guildId, links] of Object.entries(s.links ?? {})) s.guilds[guildId] = { links, ...s.guilds[guildId] };
     delete s.links;
@@ -444,7 +466,8 @@ class LiveBot {
     const server = serverText(this.config.presence, stats);
     // Só alterna com alguém ao vivo. Sem transmissão, um texto fixo: a carga do
     // servidor se tem gente conectada, senão o "idle".
-    this.presenceTexts = (streams.length ? [main, server] : [stats?.clients > 0 && server ? server : main]).filter(Boolean);
+    // Sem ninguém transmitindo, o status fica sem texto (só a bolinha de ausente).
+    this.presenceTexts = streams.length ? [main, server].filter(Boolean) : [];
     this.presenceLive = streams.length > 0;
     this.showPresence();
   }
@@ -483,7 +506,7 @@ class LiveBot {
     this.presenceAt = Date.now();
     const type = ACTIVITY_TYPE[this.config.presence.type];
     // "custom" mostra só o texto; os outros tipos aparecem como "Jogando <texto>" etc.
-    const activity = type === undefined ? { type: ActivityType.Custom, name: 'OpenSpeak', state: text } : { type, name: text };
+    const activity = type === undefined ? { type: ActivityType.Custom, name: 'Frisquila', state: text } : { type, name: text };
     this.client.user.setPresence({ status: live ? 'online' : 'idle', activities: text ? [activity] : [] });
   }
 
@@ -614,7 +637,7 @@ class LiveBot {
     if (!pending) {
       pending = (async () => {
         const existing = (await channel.fetchWebhooks()).find(w => w.owner?.id === this.client.user.id && w.token);
-        return existing ?? channel.createWebhook({ name: 'OpenSpeak links', reason: 'Correção de links do X/Twitter' });
+        return existing ?? channel.createWebhook({ name: 'Frisquila links', reason: 'Correção de links do X/Twitter' });
       })();
       pending.catch(() => this.webhooks.delete(channel.id)); // tenta de novo na próxima
       this.webhooks.set(channel.id, pending);
@@ -668,6 +691,12 @@ class LiveBot {
    */
   async registerCommands() {
     const existing = await this.client.application.commands.fetch();
+    // Comandos que saíram (renomeados): só esses; o resto da aplicação fica como está.
+    for (const command of existing.values()) {
+      if (!RETIRED_COMMANDS.includes(command.name)) continue;
+      await command.delete();
+      log(`comando /${command.name} removido`);
+    }
     for (const command of COMMANDS) {
       const json = command.toJSON();
       const current = existing.find(c => c.name === json.name);
@@ -677,7 +706,7 @@ class LiveBot {
     }
   }
 
-  /** Versões antigas registravam o /openspeak por servidor: com o global, ficaria duplicado. */
+  /** Versões antigas registravam os comandos por servidor: com o global, ficaria duplicado. */
   async removeGuildCommands(guild) {
     try {
       for (const command of (await guild.commands.fetch()).values())
@@ -897,7 +926,85 @@ class LiveBot {
     await interaction.update(renderUserLinks(this.userLinksView(interaction, notice)));
   }
 
+  // ---------------------------------------------------------- Deadlock
+
+  /** Autocomplete do herói nos comandos de Deadlock. */
+  async onAutocomplete(interaction) {
+    if (!DEADLOCK_COMMANDS.has(interaction.commandName)) return interaction.respond([]);
+    try {
+      await interaction.respond(await this.dl.heroChoices(interaction.options.getFocused()));
+    } catch (err) {
+      log('deadlock: autocomplete:', explain(err));
+      await interaction.respond([]).catch(() => {});
+    }
+  }
+
+  /** Tela de cada comando (também usada pelos botões "Build" e "Counters"). */
+  async deadlockView(kind, hero, rank, selected) {
+    if (kind === 'build') {
+      const { ranked, items } = await this.dl.bestBuilds(hero.id, rank);
+      return renderBuild({ hero, rank, ranked, items, selected });
+    }
+    if (kind === 'counter') {
+      const [data, heroes] = await Promise.all([this.dl.counters(hero.id, rank), this.dl.heroes()]);
+      return renderCounters({ hero, rank, data, heroes: new Map(heroes.map(h => [h.id, h])) });
+    }
+    return renderHero({ hero, rank, summary: await this.dl.heroSummary(hero.id, rank) });
+  }
+
+  async onDeadlockCommand(interaction) {
+    await interaction.deferReply();
+    const text = interaction.options.getString('heroi', true);
+    const rank = interaction.options.getString('rank') ?? 'todos';
+    try {
+      const hero = await this.dl.findHero(text);
+      if (!hero) return void await interaction.editReply(`Não achei o herói "${text.slice(0, 50)}". Escolha um da lista que aparece ao digitar.`);
+      await interaction.editReply({ ...(await this.deadlockView(interaction.commandName, hero, rank)), allowedMentions: { parse: [] } });
+    } catch (err) {
+      log(`/${interaction.commandName}:`, explain(err));
+      await interaction.editReply('A deadlock-api não respondeu agora. Tenta de novo em alguns instantes.').catch(() => {});
+    }
+  }
+
+  /** Botões e menus "dl:…" das telas de Deadlock. */
+  async onDeadlockComponent(interaction) {
+    const [, action, a, b] = interaction.customId.split(':');
+    try {
+      if (action === 'pick') { // outra build no menu: troca a mesma mensagem
+        await interaction.deferUpdate();
+        const hero = await this.dl.findHero(a);
+        await interaction.editReply(await this.deadlockView('build', hero, b ?? 'todos', Number(interaction.values[0])));
+        return;
+      }
+      if (action === 'build' || action === 'counter') { // "Build"/"Counters": nova mensagem
+        await interaction.deferReply();
+        const hero = await this.dl.findHero(a);
+        await interaction.editReply(await this.deadlockView(action, hero, b ?? 'todos'));
+        return;
+      }
+      if (action === 'code' || action === 'notes') { // só para quem clicou
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        const entry = await this.dl.build(Number(a));
+        if (!entry) return void await interaction.editReply('Essa build não existe mais.');
+        const build = entry.hero_build;
+        if (action === 'code') {
+          const hero = await this.dl.findHero(String(build.hero_id));
+          return void await interaction.editReply(renderCode({ hero, build, code: buildCode(build) }));
+        }
+        const [first, ...rest] = renderNotes({ build, items: await this.dl.items() });
+        await interaction.editReply(first);
+        for (const msg of rest) await interaction.followUp({ ...msg, flags: MessageFlags.Ephemeral });
+      }
+    } catch (err) {
+      log(`deadlock (${interaction.customId}):`, explain(err));
+      const msg = 'A deadlock-api não respondeu agora. Tenta de novo em alguns instantes.';
+      if (interaction.deferred || interaction.replied) await interaction.editReply({ content: msg, embeds: [], components: [] }).catch(() => {});
+      else await interaction.reply({ content: msg, flags: MessageFlags.Ephemeral }).catch(() => {});
+    }
+  }
+
   async onCommand(interaction) {
+    if (DEADLOCK_COMMANDS.has(interaction.commandName)) return this.onDeadlockCommand(interaction);
     if (interaction.commandName === 'aovivo') return this.onLiveCommand(interaction);
     if (interaction.commandName === 'servidor') return this.onServerCommand(interaction);
     if (interaction.commandName === 'links') return this.onUserLinksCommand(interaction);
@@ -965,6 +1072,9 @@ function createClient(readMessages) {
   c.once('clientReady', () => onReady(c, readMessages).catch(err => log('erro ao iniciar:', err)));
   c.on('interactionCreate', interaction => {
     if (!bot) return;
+    if (interaction.isAutocomplete?.()) return void bot.onAutocomplete(interaction).catch(err => log('autocomplete:', explain(err)));
+    if (interaction.isMessageComponent?.() && interaction.customId.startsWith('dl:'))
+      return void bot.onDeadlockComponent(interaction).catch(err => log(`deadlock (${interaction.customId}):`, explain(err)));
     if (interaction.isMessageComponent?.() && interaction.customId.startsWith('os:'))
       return void bot.onComponent(interaction).catch(err => log(`painel (${interaction.customId}):`, explain(err)));
     if (!interaction.isChatInputCommand() || !COMMAND_NAMES.has(interaction.commandName)) return;
@@ -1008,7 +1118,7 @@ async function onReady(client, readMessages) {
     const n = bot.notices(guild.id);
     if (!n.chat.enabled && !n.voiceStatus.enabled) continue;
     const voice = !n.voiceStatus.enabled ? 'desligado' : n.voiceStatus.channelId ? 'canal fixo' : 'calls com gente';
-    const chat = !n.chat.enabled ? 'desligado' : n.chat.channelId ? 'ligado' : 'sem canal (use /openspeak canal)';
+    const chat = !n.chat.enabled ? 'desligado' : n.chat.channelId ? 'ligado' : 'sem canal (escolha no /painel)';
     log(`avisos em "${guild.name}": chat ${chat}, status de voz ${voice}`);
   }
   log(`status do bot ${c.presence.enabled ? 'ligado' : 'desligado'}; ${client.guilds.cache.size} servidor(es)`);

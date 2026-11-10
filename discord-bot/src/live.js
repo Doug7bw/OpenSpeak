@@ -173,11 +173,11 @@ export function planVoiceUpdates(current, targets, text) {
   return updates;
 }
 
-/** Opção de /openspeak avisos -> seção da config. */
+/** Aviso -> seção da config. */
 export const NOTICES = { chat: 'chat', voz: 'voiceStatus', status: 'presence' };
 
 /**
- * Config efetiva: o config.json com as escolhas feitas pelo /openspeak por cima
+ * Config efetiva: o config.json com as escolhas feitas pelo /painel por cima
  * (guardadas no state.json). Só o canal do chat e o liga/desliga de cada aviso.
  */
 export function applySettings(config, settings = {}) {
@@ -197,7 +197,7 @@ export const GUILD_NOTICES = ['chat', 'voiceStatus'];
 /**
  * Avisos de um servidor do Discord: o config.json é o padrão (só nos servidores
  * permitidos por `guildId`; IDs de canal da config só valem no servidor do canal,
- * o que o bot confere ao usar) e as escolhas do /openspeak naquele servidor vão por cima.
+ * o que o bot confere ao usar) e as escolhas do /painel naquele servidor vão por cima.
  */
 export function guildNotices(config, saved = {}, guildId) {
   const allowed = !config.guildId || config.guildId === guildId;
@@ -231,7 +231,7 @@ export function migrateMessages(messages = {}, guildOf = () => undefined) {
 }
 
 /**
- * Escolhas antigas do /openspeak (globais: state.settings.chat/voiceStatus) ->
+ * Escolhas antigas do /painel (globais: state.settings.chat/voiceStatus) ->
  * por servidor. `chatGuild`: servidor do canal do chat antigo (ou null);
  * `guildIds`: servidores onde o bot está. O status de voz automático valia em
  * todos, então continua ligado em todos. Devolve {settings, guilds} novos.
@@ -284,8 +284,8 @@ export function checkConfig(config) {
   if (config.voiceStatus.enabled && config.voiceStatus.channelId && !id(config.voiceStatus.channelId))
     problems.push('voiceStatus.channelId precisa ser o ID do canal de voz (ou vazio para os canais com gente)');
   if (config.guildId && !id(config.guildId)) problems.push('guildId precisa ser o ID do servidor do Discord (ou vazio)');
-  // Sem channelId o chat espera o /openspeak canal.
-  if (config.chat.channelId && !id(config.chat.channelId)) problems.push('chat.channelId precisa ser o ID do canal de texto (ou vazio para escolher com /openspeak canal)');
+  // Sem channelId o chat espera o /painel canal.
+  if (config.chat.channelId && !id(config.chat.channelId)) problems.push('chat.channelId precisa ser o ID do canal de texto (ou vazio para escolher com /painel canal)');
   if (!ON_END.includes(config.chat.onEnd)) problems.push(`chat.onEnd deve ser ${ON_END.join(', ')}`);
   return problems;
 }

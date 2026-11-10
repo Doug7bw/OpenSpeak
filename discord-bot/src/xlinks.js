@@ -2,7 +2,7 @@
 // a prévia certa no Discord (fxtwitter.com por padrão). Só funções puras aqui; o
 // envio (resposta ou webhook) fica no bot.js.
 
-/** Serviços aceitos em /openspeak links servico:. */
+/** Serviços aceitos (menu do painel). */
 export const LINK_SERVICES = ['fxtwitter.com', 'fixupx.com', 'vxtwitter.com'];
 
 /** Modos: "responder" tira a prévia original e responde; "substituir" apaga e reenvia como o autor. */
