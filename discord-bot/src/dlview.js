@@ -288,7 +288,7 @@ export function renderCounterItems({ hero, rank, list }) {
     .setAuthor({ name: 'Itens contra', iconURL: hero.icon ?? undefined })
     .setTitle(`🧪 Contra ${hero.name}`)
     .setDescription(list.length
-      ? `Itens que **ganham mais do que o normal** quando o **${hero.name}** está no time inimigo (win rate contra ele vs. o win rate de sempre do item).`
+      ? `Itens que **mais ajudam** quando o **${hero.name}** está no time inimigo: quanto o win rate do item contra ele fica acima da média dos itens (já descontando o quanto o ${hero.name} é forte ou fraco). Entre parênteses, o win rate do item contra ele e o de sempre.`
       : 'Sem partidas suficientes nesse rank para comparar.');
   if (list.length) {
     embed.addFields({

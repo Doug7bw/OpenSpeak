@@ -22,7 +22,7 @@ import {
 } from './live.js';
 import { startWebhook } from './webhook.js';
 import { PAGES, openButtonRow, renderPanel, renderUserLinks } from './panel.js';
-import { HELP_TEXT, answerGateway, answerMessages, askGateway, findHeroInText, findItemInText, gatewayMessages, officialContext, parseQuestion } from './ask.js';
+import { HELP_TEXT, isBeginnerQuestion, answerGateway, answerMessages, askGateway, findHeroInText, findItemInText, gatewayMessages, officialContext, parseQuestion } from './ask.js';
 import { buildCode } from './buildcode.js';
 import { renderBuildImage } from './buildimage.js';
 import { DeadlockData, RANKS } from './deadlock.js';
@@ -576,7 +576,8 @@ class LiveBot {
           // Sem o herói/item que a tela precisa, vira pergunta aberta (a IA responde com os textos oficiais).
           const open = { kind: 'pergunta', rank: ai.rank };
           if (ai.kind === 'pergunta') q = open;
-          else if (ai.kind === 'ranking') q = { kind: 'ranking', rank: ai.rank };
+          // "herói bom pra iniciante" não é ranking por win rate: a IA responde com a complexidade.
+          else if (ai.kind === 'ranking') q = isBeginnerQuestion(text) ? open : { kind: 'ranking', rank: ai.rank };
           else if (ai.kind === 'item') q = item ? { kind: 'item', item, rank: ai.rank } : open;
           else if (ai.kind) q = hero ? { kind: ai.kind, hero, rank: ai.rank } : open;
           // ai.kind null = "outro" (não é de Deadlock): cai na ajuda.

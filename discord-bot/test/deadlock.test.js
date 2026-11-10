@@ -200,7 +200,8 @@ test('itens contra, ranking, texto do jogo e as telas novas', async () => {
   const all = [{ item_id: 1, wins: 5000, matches: 10000 }, { item_id: 2, wins: 5000, matches: 10000 }, { item_id: 3, wins: 5000, matches: 10000 }];
   const list = counterItems(vs, all, items);
   assert.deepEqual(list.map(x => x.item.name), ['Decay']); // removido do jogo e "ganho" negativo ficam fora
-  assert.ok(Math.abs(list[0].gain - 0.03) < 1e-9);
+  // Decay +3 pp, Ruim -10 pp: média ponderada -3,5 pp, então o Decay fica +6,5 pp acima da média.
+  assert.ok(Math.abs(list[0].gain - 0.065) < 1e-9);
 
   const rank = heroRanking([{ hero_id: 1, wins: 40, matches: 100 }, { hero_id: 2, wins: 60, matches: 100 }]);
   assert.deepEqual(rank.map(r => r.heroId), [2, 1]);

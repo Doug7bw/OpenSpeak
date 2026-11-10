@@ -36,20 +36,22 @@ export function stripHtml(html) {
 }
 
 /**
- * Itens que mais ajudam contra um herói: win rate do item quando o inimigo é o herói
- * menos o win rate normal do item ("ganho"). Só itens com partidas suficientes nos dois.
+ * Itens que mais ajudam contra um herói. Para cada item: win rate quando o herói está no
+ * time inimigo menos o win rate de sempre do item. Herói forte faz todo item perder
+ * contra ele, então desconta a média dessa diferença (ponderada por partidas): "gain" é
+ * quanto o item fica acima da média contra o herói. Só itens com partidas suficientes nos dois.
  */
 export function counterItems(vsRows, allRows, items, { limit = 8, minMatches } = {}) {
   const base = new Map(allRows.map(r => [r.item_id, r]));
   const top = Math.max(0, ...vsRows.map(r => r.matches));
   const floor = minMatches ?? Math.max(200, Math.round(top * 0.02));
-  return vsRows
+  const rows = vsRows
     .map(r => ({ r, b: base.get(r.item_id), it: items.get(r.item_id) }))
     .filter(({ r, b, it }) => it?.shopable && b && r.matches >= floor && b.matches >= floor)
-    .map(({ r, b, it }) => ({
-      item: it, matches: r.matches, winRate: r.wins / r.matches, base: b.wins / b.matches,
-      gain: r.wins / r.matches - b.wins / b.matches, buyTime: r.avg_buy_time_s ?? null,
-    }))
+    .map(({ r, b, it }) => ({ item: it, matches: r.matches, winRate: r.wins / r.matches, base: b.wins / b.matches, buyTime: r.avg_buy_time_s ?? null }));
+  const weight = rows.reduce((n, x) => n + x.matches, 0);
+  const shift = weight ? rows.reduce((n, x) => n + (x.winRate - x.base) * x.matches, 0) / weight : 0;
+  return rows.map(x => ({ ...x, gain: x.winRate - x.base - shift, shift }))
     .filter(x => x.gain > 0)
     .sort((a, b) => b.gain - a.gain)
     .slice(0, limit);

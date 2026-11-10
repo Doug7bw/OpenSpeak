@@ -89,5 +89,6 @@ test('contexto oficial para a IA: lore, habilidades e item citados', async () =>
   assert.match(ctx, /ITEM Decay \(Degeneração\).*Anticura/);
   const msgs = answerMessages('pergunta?', ctx);
   assert.match(msgs[1].content, /^CONTEXTO:/);
-  assert.match(msgs[0].content, /Não invente números/);
+  assert.match(msgs[0].content, /nunca invente/);
+  assert.match(msgs[0].content, /FATOS:\n.*Valve/);
 });
