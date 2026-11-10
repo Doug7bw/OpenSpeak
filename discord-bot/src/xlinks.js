@@ -8,7 +8,19 @@ export const LINK_SERVICES = ['fxtwitter.com', 'fixupx.com', 'vxtwitter.com'];
 /** Modos: "responder" tira a prévia original e responde; "substituir" apaga e reenvia como o autor. */
 export const LINK_MODES = ['responder', 'substituir'];
 
-export const DEFAULT_LINK_SETTINGS = Object.freeze({ enabled: false, mode: 'responder', service: 'fxtwitter.com' });
+/** Alcance: "usuarios" = só quem ativou com /links; "todos" = todo mundo, menos quem desativou. */
+export const LINK_SCOPES = ['usuarios', 'todos'];
+
+export const DEFAULT_LINK_SETTINGS = Object.freeze({ enabled: false, mode: 'responder', service: 'fxtwitter.com', scope: 'usuarios' });
+
+/**
+ * Corrige os links desta pessoa neste servidor? `userChoice`: true (ativou com
+ * /links), false (desativou) ou undefined (nunca escolheu = desligado, exceto no alcance "todos").
+ */
+export function linksApplyTo(settings, userChoice) {
+  if (!settings.enabled || userChoice === false) return false;
+  return userChoice === true || settings.scope === 'todos';
+}
 
 /**
  * Post do X/Twitter: https://(www.|mobile.)x.com|twitter.com/<usuario>/status/<id>[/photo/1 ...][?s=20][#...]
@@ -23,6 +35,7 @@ export function linkSettings(saved) {
   if (typeof saved?.enabled === 'boolean') out.enabled = saved.enabled;
   if (LINK_MODES.includes(saved?.mode)) out.mode = saved.mode;
   if (LINK_SERVICES.includes(saved?.service)) out.service = saved.service;
+  if (LINK_SCOPES.includes(saved?.scope)) out.scope = saved.scope;
   return out;
 }
 

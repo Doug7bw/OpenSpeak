@@ -17,11 +17,12 @@ import {
   SlashCommandBuilder,
 } from 'discord.js';
 import {
-  NOTICES, appLabel, applySettings, checkConfig, diff, guildNotices, migrateMessages, migrateSettings, formatDuration, parseLive, parseStats, planVoiceUpdates,
+  appLabel, applySettings, checkConfig, diff, guildNotices, migrateMessages, migrateSettings, formatDuration, parseLive, parseStats, planVoiceUpdates,
   mediaText, presenceText, serverText, statsVars, streamKey, voiceStatusText, watchersText,
 } from './live.js';
 import { startWebhook } from './webhook.js';
-import { LINK_SERVICES, chooseLinkAction, linkSettings, rewriteXLinks, webhookName } from './xlinks.js';
+import { PAGES, openButtonRow, renderPanel, renderUserLinks } from './panel.js';
+import { chooseLinkAction, linkSettings, linksApplyTo, rewriteXLinks, webhookName } from './xlinks.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CONFIG_FILE = path.resolve(process.env.OPENSPEAK_BOT_CONFIG ?? path.join(ROOT, 'config.json'));
@@ -62,9 +63,11 @@ function loadState() {
       // Por servidor do Discord: { chat, voiceStatus, links } (escolhas do /openspeak naquele servidor).
       guilds: state.guilds && typeof state.guilds === 'object' ? state.guilds : {},
       links: state.links, // formato antigo (só migração)
+      // Por usuário do Discord: { links: true/false } (escolha do /links; vale em todos os servidores).
+      users: state.users && typeof state.users === 'object' ? state.users : {},
     };
   } catch {
-    return { messages: {}, voice: {}, settings: {}, guilds: {} };
+    return { messages: {}, voice: {}, settings: {}, guilds: {}, users: {} };
   }
 }
 
@@ -85,61 +88,15 @@ function explain(err) {
   return err?.message ?? String(err);
 }
 
-/** /openspeak: avisos e links deste servidor (o status do bot é global). */
+/** /openspeak: abre o painel de configuração deste servidor (tudo por botões e menus). */
 const ADMIN_COMMAND = new SlashCommandBuilder()
   .setName('openspeak')
-  .setDescription('Avisos de transmissões do OpenSpeak')
+  .setDescription('Painel do bot: avisos de transmissão, status de voz e links do X')
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
   .setContexts(InteractionContextType.Guild)
-  .addSubcommand(sub => sub
-    .setName('canal')
-    .setDescription('Canal de texto deste servidor onde o bot avisa quem está ao vivo')
-    .addChannelOption(opt => opt
-      .setName('canal').setDescription('Canal de texto').setRequired(true)
-      .addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)))
-  .addSubcommand(sub => sub
-    .setName('avisos')
-    .setDescription('Liga ou desliga um dos avisos')
-    .addStringOption(opt => opt
-      .setName('aviso').setDescription('Qual aviso').setRequired(true)
-      .addChoices(
-        { name: 'Chat (mensagem no canal de texto)', value: 'chat' },
-        { name: 'Status do canal de voz', value: 'voz' },
-        { name: 'Status do bot', value: 'status' },
-      ))
-    .addBooleanOption(opt => opt.setName('ligado').setDescription('Ligar ou desligar').setRequired(true)))
-  .addSubcommand(sub => sub
-    .setName('voz')
-    .setDescription('Canal de voz do status (sem canal: as calls com alguém conectado)')
-    .addChannelOption(opt => opt
-      .setName('canal').setDescription('Canal de voz fixo (deixe vazio para as calls com gente)')
-      .addChannelTypes(ChannelType.GuildVoice)))
-  .addSubcommand(sub => sub
-    .setName('mencao')
-    .setDescription('Quem o aviso no chat menciona')
-    .addStringOption(opt => opt
-      .setName('quem').setDescription('Quem mencionar').setRequired(true)
-      .addChoices(
-        { name: 'Ninguém', value: 'ninguem' },
-        { name: '@here', value: '@here' },
-        { name: '@everyone', value: '@everyone' },
-        { name: 'Um cargo (escolha em "cargo")', value: 'cargo' },
-      ))
-    .addRoleOption(opt => opt.setName('cargo').setDescription('Cargo a mencionar')))
-  .addSubcommand(sub => sub
-    .setName('links')
-    .setDescription('Corrige links do X/Twitter neste servidor (troca por fxtwitter para a prévia funcionar)')
-    .addBooleanOption(opt => opt.setName('ligado').setDescription('Ligar ou desligar').setRequired(true))
-    .addStringOption(opt => opt
-      .setName('modo').setDescription('Como corrigir (padrão: responder)')
-      .addChoices(
-        { name: 'Responder: tira a prévia original e responde com o link corrigido', value: 'responder' },
-        { name: 'Substituir: apaga a mensagem e reenvia como o autor', value: 'substituir' },
-      ))
-    .addStringOption(opt => opt
-      .setName('servico').setDescription('Serviço da prévia (padrão: fxtwitter.com)')
-      .addChoices(...LINK_SERVICES.map(s => ({ name: s, value: s })))))
-  .addSubcommand(sub => sub.setName('ver').setDescription('Mostra a configuração deste servidor'));
+  .addStringOption(opt => opt
+    .setName('secao').setDescription('Abrir direto numa seção do painel')
+    .addChoices(...Object.entries(PAGES).map(([value, p]) => ({ name: p.label, value }))));
 
 /** Comandos para qualquer pessoa (também na DM com o bot). */
 const PUBLIC_CONTEXTS = [InteractionContextType.Guild, InteractionContextType.BotDM];
@@ -149,6 +106,8 @@ const COMMANDS = [
     .setContexts(...PUBLIC_CONTEXTS),
   new SlashCommandBuilder().setName('servidor').setDescription('Usuários online, transmissões e tráfego do servidor OpenSpeak')
     .setContexts(...PUBLIC_CONTEXTS),
+  new SlashCommandBuilder().setName('links').setDescription('Ativar ou desativar a correção dos seus links do X/Twitter (fxtwitter)')
+    .setContexts(...PUBLIC_CONTEXTS),
 ];
 const COMMAND_NAMES = new Set(COMMANDS.map(c => c.name));
 
@@ -156,11 +115,6 @@ const COMMAND_NAMES = new Set(COMMANDS.map(c => c.name));
 const ACTIVITY_TYPE = {
   playing: ActivityType.Playing, watching: ActivityType.Watching,
   listening: ActivityType.Listening, competing: ActivityType.Competing,
-};
-
-const LINK_MODE_NAME = {
-  responder: 'responde com o link corrigido (tira a prévia original)',
-  substituir: 'apaga e reenvia como o autor',
 };
 
 const NOTICE_NAME = { chat: 'Chat', voiceStatus: 'Status do canal de voz', presence: 'Status do bot' };
@@ -381,6 +335,7 @@ class LiveBot {
       const message = await channel.send({
         content: mention || undefined,
         embeds: [this.embedFor(s)],
+        components: [openButtonRow(this.config.openspeakUrl, 'Assistir no OpenSpeak')],
         allowedMentions: mention ? { parse: ['everyone', 'roles', 'users'] } : { parse: [] },
       });
       const entry = (this.state.messages[key] ??= { stream: s, watchers: [...(this.watched.get(key) ?? [])], posts: {} });
@@ -424,7 +379,7 @@ class LiveBot {
     for await (const msg of this.posts(key)) {
       try {
         if (this.config.chat.onEnd === 'delete') await msg.delete();
-        else if (this.config.chat.onEnd === 'edit' && s) await msg.edit({ content: null, embeds: [this.embedFor(s, true, watchers)] });
+        else if (this.config.chat.onEnd === 'edit' && s) await msg.edit({ content: null, embeds: [this.embedFor(s, true, watchers)], components: [] });
       } catch (err) {
         if (err?.code !== 10008) log('chat: falha ao encerrar aviso:', explain(err)); // 10008 = mensagem já apagada
       }
@@ -538,7 +493,7 @@ class LiveBot {
     if (!message.inGuild() || message.author.bot || message.webhookId || message.system) return;
     if (message.type !== MessageType.Default && message.type !== MessageType.Reply) return;
     const settings = this.links(message.guildId);
-    if (!settings.enabled) return;
+    if (!linksApplyTo(settings, this.state.users[message.author.id]?.links)) return;
     const { content, links } = rewriteXLinks(message.content, settings.service);
     if (!links.length) return;
 
@@ -635,36 +590,6 @@ class LiveBot {
     this.saveGuild(guildId, 'links', { ...this.links(guildId), ...change });
   }
 
-  linksText(guildId) {
-    const l = this.links(guildId);
-    const status = !l.enabled ? 'desligado — ligue com `/openspeak links`' : `${LINK_MODE_NAME[l.mode]}, via ${l.service}`;
-    const warn = l.enabled && !this.messageIntent
-      ? '\n⚠️ Sem o **Message Content Intent** no Developer Portal o bot não lê as mensagens: ative e reinicie o bot.' : '';
-    return `${l.enabled ? '🟢' : '⚪'} **Links do X/Twitter**: ${status}${warn}`;
-  }
-
-  async onLinksCommand(interaction, reply) {
-    const change = { enabled: interaction.options.getBoolean('ligado', true) };
-    const mode = interaction.options.getString('modo');
-    const service = interaction.options.getString('servico');
-    if (mode) change.mode = mode;
-    if (service) change.service = service;
-    this.saveLinks(interaction.guildId, change);
-    log(`/openspeak links: ${change.enabled ? 'ligado' : 'desligado'} em "${interaction.guild?.name}" (por ${interaction.user.tag})`);
-
-    const l = this.links(interaction.guildId);
-    const perms = interaction.channel?.permissionsFor?.(this.client.user);
-    const missing = [];
-    if (l.enabled && perms && !perms.has(PermissionFlagsBits.ManageMessages))
-      missing.push('**Gerenciar mensagens** (tirar a prévia / apagar)');
-    if (l.enabled && perms && l.mode === 'substituir' && !perms.has(PermissionFlagsBits.ManageWebhooks))
-      missing.push('**Gerenciar webhooks** (sem isso, respondo em vez de substituir)');
-    const hint = missing.length ? `\nNeste canal falta: ${missing.join(', ')}.` : '';
-    await reply(`${this.linksText(interaction.guildId)}${hint}`);
-  }
-
-  // ------------------------------------------------------- /openspeak
-
   /**
    * Comandos globais: é o que faz o Discord mostrar "Supports Slash Commands" no
    * perfil do bot. Um create por comando (sobrescreve pelo nome) em vez de set(),
@@ -696,6 +621,11 @@ class LiveBot {
     this.state.settings.presence = { ...this.state.settings.presence, enabled };
     saveState(this.state);
     this.config = applySettings(this.baseConfig, this.state.settings);
+    if (!enabled) {
+      this.lastPresence = this.presenceMain = null;
+      this.presenceTexts = [];
+      this.client.user.setPresence({ status: 'online', activities: [] });
+    } else this.enqueue(() => this.apply(this.streams));
   }
 
   /** Quem pode mexer no status do bot, que aparece em todos os servidores. */
@@ -703,95 +633,204 @@ class LiveBot {
     return this.isBotOwner(interaction.user) || Boolean(this.config.guildId && interaction.guildId === this.config.guildId);
   }
 
-  describe(guildId) {
-    const n = this.notices(guildId);
-    const dot = on => (on ? '🟢' : '⚪');
-    const inHere = id => id && this.inGuild(id, guildId);
-    const chat = inHere(n.chat.channelId) ? `<#${n.chat.channelId}>` : 'nenhum canal escolhido — use `/openspeak canal`';
-    const mention = n.chat.mention ? `, mencionando ${n.chat.mention}` : '';
-    const voice = inHere(n.voiceStatus.channelId) ? `<#${n.voiceStatus.channelId}>` : 'calls com alguém conectado';
-    const v = statsVars(this.stats);
-    return ['**Neste servidor**',
-      `${dot(n.chat.enabled)} **${NOTICE_NAME.chat}**: ${chat}${mention}`,
-      `${dot(n.voiceStatus.enabled)} **${NOTICE_NAME.voiceStatus}**: ${voice}`,
-      this.linksText(guildId),
-      '**Em todos os servidores**',
-      `${dot(this.config.presence.enabled)} **${NOTICE_NAME.presence}** (só o dono do bot muda)`,
-      `Transmissões ao vivo agora: **${this.streams.length}**`,
-      `Servidor: **${v.usuarios}** online, **${v.transmissoes}** transmissões, **${v.assistindo}** assistindo, **${v.mbps}** Mbps`,
-    ].join('\n');
+  // ------------------------------------------------------------ painel
+
+  /** Problemas que impedem um recurso de funcionar neste servidor (permissões, intent). */
+  warnings(guild) {
+    const n = this.notices(guild.id);
+    const l = this.links(guild.id);
+    const me = guild.members?.me;
+    const has = (perms, flag) => !perms || perms.has(flag);
+    const out = { chat: [], voice: [], links: [] };
+    if (n.chat.enabled) {
+      const channel = n.chat.channelId && this.inGuild(n.chat.channelId, guild.id) ? this.client.channels.cache.get(n.chat.channelId) : null;
+      if (!channel) out.chat.push('Escolha o canal dos avisos.');
+      else {
+        const perms = channel.permissionsFor?.(me ?? this.client.user);
+        const missing = [[PermissionFlagsBits.ViewChannel, 'Ver canal'], [PermissionFlagsBits.SendMessages, 'Enviar mensagens'],
+          [PermissionFlagsBits.EmbedLinks, 'Inserir links'], [PermissionFlagsBits.ReadMessageHistory, 'Ler histórico']]
+          .filter(([flag]) => !has(perms, flag)).map(([, name]) => `**${name}**`);
+        if (missing.length) out.chat.push(`Em <#${channel.id}> me falta: ${missing.join(', ')}.`);
+      }
+    }
+    if (n.voiceStatus.enabled && me && !(me.permissions.has(PermissionFlagsBits.SetVoiceChannelStatus) && me.permissions.has(PermissionFlagsBits.ManageChannels)))
+      out.voice.push('Me falta **Definir status do canal de voz** e **Gerenciar canais** (no cargo do bot).');
+    if (l.enabled) {
+      if (!this.messageIntent) out.links.push('Ative o **Message Content Intent** no Developer Portal e reinicie o bot.');
+      if (me && !me.permissions.has(PermissionFlagsBits.ManageMessages)) out.links.push('Me falta **Gerenciar mensagens** (tirar a prévia / apagar).');
+      if (me && l.mode === 'substituir' && !me.permissions.has(PermissionFlagsBits.ManageWebhooks))
+        out.links.push('Me falta **Gerenciar webhooks**: sem isso, respondo em vez de substituir.');
+    }
+    return out;
+  }
+
+  /** Retrato da configuração deste servidor para o painel (src/panel.js). */
+  panelView(interaction, notice = null) {
+    const guild = interaction.guild;
+    const n = this.notices(guild.id);
+    const valid = id => (id && this.inGuild(id, guild.id) ? id : '');
+    return {
+      notice,
+      guild: { name: guild.name, iconURL: guild.iconURL({ size: 128 }) },
+      botAvatar: this.client.user.displayAvatarURL({ size: 256 }),
+      openspeakUrl: this.config.openspeakUrl,
+      allowed: n.allowed,
+      chat: { enabled: n.chat.enabled, channelId: valid(n.chat.channelId), mention: n.chat.mention },
+      voice: { enabled: n.voiceStatus.enabled, channelId: valid(n.voiceStatus.channelId) },
+      links: this.links(guild.id),
+      presence: { enabled: this.config.presence.enabled, canChange: this.canChangePresence(interaction), text: this.lastPresence },
+      live: this.streams.length,
+      stats: statsVars(this.stats),
+      warnings: this.warnings(guild),
+    };
+  }
+
+  async onPanelCommand(interaction) {
+    if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild))
+      return interaction.reply({ content: 'Só quem pode **Gerenciar servidor** mexe no painel.', flags: MessageFlags.Ephemeral });
+    const page = interaction.options.getString('secao') ?? 'inicio';
+    await interaction.reply({ ...renderPanel(page, this.panelView(interaction)), flags: MessageFlags.Ephemeral, allowedMentions: { parse: [] } });
+  }
+
+  /** Botões e menus dos painéis (customId "os:..."). */
+  async onComponent(interaction) {
+    const [, action, arg, pageArg] = interaction.customId.split(':');
+    if (action === 'me') return this.onUserLinksButton(interaction, arg === 'on');
+    if (!interaction.inGuild()) return;
+    if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild))
+      return interaction.reply({ content: 'Só quem pode **Gerenciar servidor** mexe no painel.', flags: MessageFlags.Ephemeral });
+    const guildId = interaction.guildId;
+    const who = `"${interaction.guild?.name}" (por ${interaction.user.tag})`;
+    const allowed = this.notices(guildId).allowed;
+    const value = interaction.values?.[0];
+    let page = action === 'page' ? value : pageArg ?? arg ?? 'inicio';
+    let notice = null;
+    const blocked = () => (notice = '🔒 Os avisos de transmissão estão configurados só para outro servidor.');
+
+    switch (action) {
+      case 'page':
+      case 'refresh':
+        break;
+      case 't': { // liga/desliga: t:<recurso>:<página>
+        page = pageArg ?? 'inicio';
+        if (arg === 'chat' || arg === 'voz') {
+          if (!allowed) { blocked(); break; }
+          const section = arg === 'chat' ? 'chat' : 'voiceStatus';
+          const enabled = !this.notices(guildId)[section].enabled;
+          this.saveGuild(guildId, section, { enabled });
+          if (enabled) this.enqueue(() => this.apply(this.streams));
+          else if (section === 'voiceStatus') this.syncVoice(); // tira as calls deste servidor da lista: limpa
+          log(`painel: ${NOTICE_NAME[section]} ${enabled ? 'ligado' : 'desligado'} em ${who}`);
+          notice = `${enabled ? '✅' : '⭕'} ${NOTICE_NAME[section]} ${enabled ? 'ligado' : 'desligado'}.`;
+        } else if (arg === 'links') {
+          const enabled = !this.links(guildId).enabled;
+          this.saveLinks(guildId, { enabled });
+          log(`painel: links do X ${enabled ? 'ligado' : 'desligado'} em ${who}`);
+          notice = `${enabled ? '✅' : '⭕'} Correção de links do X ${enabled ? 'ligada' : 'desligada'}.`;
+        } else if (arg === 'status') {
+          if (!this.canChangePresence(interaction)) { notice = '🔒 Só o dono do bot liga ou desliga o status do bot.'; break; }
+          const enabled = !this.config.presence.enabled;
+          this.savePresence(enabled);
+          log(`painel: status do bot ${enabled ? 'ligado' : 'desligado'} (por ${interaction.user.tag})`);
+          notice = `${enabled ? '✅' : '⭕'} Status do bot ${enabled ? 'ligado' : 'desligado'} (em todos os servidores).`;
+        }
+        break;
+      }
+      case 'chatchan': {
+        page = 'chat';
+        if (!allowed) { blocked(); break; }
+        const channel = interaction.channels.first();
+        const perms = channel?.permissionsFor?.(interaction.guild.members.me ?? this.client.user);
+        const needed = [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks];
+        if (perms && !perms.has(needed)) {
+          notice = `⚠️ Não consigo escrever em <#${channel.id}>: preciso de **Ver canal**, **Enviar mensagens** e **Inserir links** lá.`;
+          break;
+        }
+        this.saveGuild(guildId, 'chat', { channelId: channel.id, enabled: true });
+        this.enqueue(() => this.apply(this.streams));
+        log(`painel: chat em #${channel.name} de ${who}`);
+        notice = `✅ Pronto: os avisos vão para <#${channel.id}>.`;
+        break;
+      }
+      case 'mention': {
+        page = 'chat';
+        if (!allowed) { blocked(); break; }
+        if (value === 'cargo') { notice = '🏷️ Escolha o cargo no último menu.'; break; }
+        const mention = value === 'ninguem' ? '' : value;
+        this.saveGuild(guildId, 'chat', { mention });
+        notice = mention ? `✅ Os avisos vão mencionar ${mention}.` : '✅ Os avisos não mencionam ninguém.';
+        break;
+      }
+      case 'role': {
+        page = 'chat';
+        if (!allowed) { blocked(); break; }
+        const role = interaction.roles.first();
+        const mention = role.id === guildId ? '@everyone' : `<@&${role.id}>`;
+        this.saveGuild(guildId, 'chat', { mention });
+        const warn = role.id !== guildId && !role.mentionable
+          && !interaction.guild.members.me?.permissions.has(PermissionFlagsBits.MentionEveryone)
+          ? '\n⚠️ Esse cargo não é mencionável: dê **Mencionar @everyone** ao bot ou marque o cargo como mencionável.' : '';
+        notice = `✅ Os avisos vão mencionar ${mention}.${warn}`;
+        break;
+      }
+      case 'voicechan':
+      case 'voiceauto': {
+        page = 'voz';
+        if (!allowed) { blocked(); break; }
+        const channel = action === 'voicechan' ? interaction.channels.first() : null;
+        this.saveGuild(guildId, 'voiceStatus', { channelId: channel?.id ?? '', enabled: true });
+        if (channel && !this.voiceCurrent.has(channel.id)) this.voiceCurrent.set(channel.id, '\0'); // limpa status antigo
+        this.enqueue(() => this.apply(this.streams));
+        log(`painel: status de voz em ${channel ? `#${channel.name}` : 'calls com gente'} de ${who}`);
+        notice = channel ? `✅ Status de voz fixo em <#${channel.id}>.` : '✅ Status de voz nas calls com alguém conectado.';
+        break;
+      }
+      case 'linkmode':
+      case 'linkscope':
+      case 'linkservice': {
+        page = 'links';
+        const key = { linkmode: 'mode', linkscope: 'scope', linkservice: 'service' }[action];
+        this.saveLinks(guildId, { [key]: value });
+        log(`painel: links do X ${key}=${value} em ${who}`);
+        notice = '✅ Salvo.';
+        break;
+      }
+      default:
+        return;
+    }
+    await interaction.update({ ...renderPanel(page, this.panelView(interaction, notice)), allowedMentions: { parse: [] } });
+  }
+
+  // ----------------------------------------------------- /links pessoal
+
+  userLinksView(interaction, notice = null) {
+    const choice = this.state.users[interaction.user.id]?.links;
+    const view = { notice, choice, avatar: interaction.user.displayAvatarURL({ size: 128 }) };
+    if (interaction.guild) {
+      const links = this.links(interaction.guildId);
+      view.guild = { name: interaction.guild.name, links, applies: linksApplyTo(links, choice) };
+    }
+    return view;
+  }
+
+  /** /links: cada pessoa escolhe se quer os próprios links corrigidos (padrão: não). */
+  async onUserLinksCommand(interaction) {
+    await interaction.reply({ ...renderUserLinks(this.userLinksView(interaction)), flags: MessageFlags.Ephemeral });
+  }
+
+  async onUserLinksButton(interaction, enabled) {
+    this.state.users[interaction.user.id] = { ...this.state.users[interaction.user.id], links: enabled };
+    saveState(this.state);
+    log(`/links: ${interaction.user.tag} ${enabled ? 'ativou' : 'desativou'}`);
+    const notice = enabled ? '✅ Ativado: seus links do X vão ser corrigidos.' : '⭕ Desativado: seus links do X ficam como estão.';
+    await interaction.update(renderUserLinks(this.userLinksView(interaction, notice)));
   }
 
   async onCommand(interaction) {
     if (interaction.commandName === 'aovivo') return this.onLiveCommand(interaction);
     if (interaction.commandName === 'servidor') return this.onServerCommand(interaction);
-    const reply = content => interaction.reply({ content, flags: MessageFlags.Ephemeral, allowedMentions: { parse: [] } });
-    if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild))
-      return reply('Só quem pode **Gerenciar servidor** configura os avisos.');
-    const sub = interaction.options.getSubcommand();
-    const guildId = interaction.guildId;
-    if (sub === 'links') return this.onLinksCommand(interaction, reply);
-    if (sub === 'ver') return reply(this.describe(guildId));
-    // Com guildId na config, os avisos de transmissão ficam só naquele servidor (links valem em todos).
-    const otherGuild = !this.notices(guildId).allowed;
-    const avisoStatus = sub === 'avisos' && interaction.options.getString('aviso') === 'status';
-    if (otherGuild && !avisoStatus) return reply('Os avisos do OpenSpeak estão configurados para outro servidor.');
-
-    if (sub === 'canal') {
-      const channel = interaction.options.getChannel('canal', true);
-      const perms = channel.permissionsFor?.(this.client.user);
-      const needed = [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks];
-      if (perms && !perms.has(needed))
-        return reply(`Não consigo escrever em <#${channel.id}>: preciso de **Ver canal**, **Enviar mensagens** e **Inserir links** lá.`);
-      this.saveGuild(guildId, 'chat', { channelId: channel.id, enabled: true });
-      log(`/openspeak: chat em #${channel.name} de "${interaction.guild?.name}" (por ${interaction.user.tag})`);
-      this.enqueue(() => this.apply(this.streams));
-      await reply(`Pronto: vou avisar em <#${channel.id}> quando alguém começar a transmitir.`);
-      return;
-    }
-
-    if (sub === 'voz') {
-      const channel = interaction.options.getChannel('canal');
-      this.saveGuild(guildId, 'voiceStatus', { channelId: channel?.id ?? '', enabled: true });
-      if (channel && !this.voiceCurrent.has(channel.id)) this.voiceCurrent.set(channel.id, '\0'); // limpa status antigo
-      log(`/openspeak: status de voz em ${channel ? `#${channel.name}` : 'calls com gente'} de "${interaction.guild?.name}"`);
-      this.enqueue(() => this.apply(this.streams));
-      await reply(channel ? `Status de voz ligado em <#${channel.id}>.` : 'Status de voz ligado nas calls com alguém conectado.');
-      return;
-    }
-
-    if (sub === 'mencao') {
-      const who = interaction.options.getString('quem', true);
-      const role = interaction.options.getRole('cargo');
-      if (who === 'cargo' && !role) return reply('Escolha o cargo na opção **cargo**.');
-      const mention = who === 'ninguem' ? '' : who === 'cargo' ? `<@&${role.id}>` : who;
-      this.saveGuild(guildId, 'chat', { mention });
-      await reply(mention ? `Os avisos no chat vão mencionar ${mention}.` : 'Os avisos no chat não mencionam ninguém.');
-      return;
-    }
-
-    if (sub === 'avisos') {
-      const section = NOTICES[interaction.options.getString('aviso', true)];
-      const enabled = interaction.options.getBoolean('ligado', true);
-      if (section === 'presence') {
-        if (!this.canChangePresence(interaction))
-          return reply('O status do bot aparece em todos os servidores: só o dono do bot liga ou desliga.');
-        this.savePresence(enabled);
-      } else this.saveGuild(guildId, section, { enabled });
-      log(`/openspeak: ${NOTICE_NAME[section]} ${enabled ? 'ligado' : 'desligado'} em "${interaction.guild?.name}" (por ${interaction.user.tag})`);
-      if (section === 'voiceStatus' && !enabled) this.syncVoice(); // tira os canais deste servidor da lista: limpa
-      if (section === 'presence' && !enabled) {
-        this.lastPresence = this.presenceMain = null;
-        this.presenceTexts = [];
-        this.client.user.setPresence({ status: 'online', activities: [] });
-      }
-      if (enabled) this.enqueue(() => this.apply(this.streams));
-      const chatId = this.notices(guildId).chat.channelId;
-      const hint = section === 'chat' && enabled && !(chatId && this.inGuild(chatId, guildId)) ? '\nFalta escolher o canal: `/openspeak canal`.' : '';
-      await reply(`${NOTICE_NAME[section]} ${enabled ? 'ligado' : 'desligado'}.${hint}`);
-      return;
-    }
-
+    if (interaction.commandName === 'links') return this.onUserLinksCommand(interaction);
+    return this.onPanelCommand(interaction);
   }
 
   /** /aovivo: quem está transmitindo (só streams com "Mostrar ao vivo no bot do Discord"). */
@@ -811,7 +850,8 @@ class LiveBot {
       if (streams.length > 15) lines.push(`… e mais ${streams.length - 15}`);
       embed.setDescription(lines.join('\n'));
     }
-    await interaction.reply({ embeds: [embed], allowedMentions: { parse: [] } });
+    embed.setThumbnail(this.client.user.displayAvatarURL({ size: 128 }));
+    await interaction.reply({ embeds: [embed], components: [openButtonRow(this.config.openspeakUrl)], allowedMentions: { parse: [] } });
   }
 
   /** /servidor: carga do servidor (contagens agregadas do /api/live). */
@@ -825,8 +865,9 @@ class LiveBot {
         { name: 'Transmissões', value: v.transmissoes, inline: true },
         { name: 'Assistindo', value: v.assistindo, inline: true },
         { name: 'Tráfego', value: this.stats.mbps == null ? '— (P2P: a mídia não passa pelo servidor)' : `${v.mbps} Mbps`, inline: true },
-      );
-    await interaction.reply({ embeds: [embed], allowedMentions: { parse: [] } });
+      )
+      .setThumbnail(this.client.user.displayAvatarURL({ size: 128 }));
+    await interaction.reply({ embeds: [embed], components: [openButtonRow(this.config.openspeakUrl)], allowedMentions: { parse: [] } });
   }
 
   async shutdown() {
@@ -851,7 +892,10 @@ function createClient(readMessages) {
   const c = new Client({ intents });
   c.once('clientReady', () => onReady(c, readMessages).catch(err => log('erro ao iniciar:', err)));
   c.on('interactionCreate', interaction => {
-    if (!bot || !interaction.isChatInputCommand() || !COMMAND_NAMES.has(interaction.commandName)) return;
+    if (!bot) return;
+    if (interaction.isMessageComponent?.() && interaction.customId.startsWith('os:'))
+      return void bot.onComponent(interaction).catch(err => log(`painel (${interaction.customId}):`, explain(err)));
+    if (!interaction.isChatInputCommand() || !COMMAND_NAMES.has(interaction.commandName)) return;
     bot.onCommand(interaction).catch(err => log(`/${interaction.commandName}:`, explain(err)));
   });
   c.on('voiceStateUpdate', (before, after) => {

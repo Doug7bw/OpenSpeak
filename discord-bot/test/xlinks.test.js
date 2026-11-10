@@ -33,11 +33,11 @@ test('usa o serviço escolhido', () => {
 });
 
 test('config por servidor: desligada e no modo responder por padrão', () => {
-  assert.deepEqual(linkSettings(undefined), { enabled: false, mode: 'responder', service: 'fxtwitter.com' });
-  assert.deepEqual(linkSettings({ enabled: true, mode: 'substituir', service: 'vxtwitter.com' }),
-    { enabled: true, mode: 'substituir', service: 'vxtwitter.com' });
-  assert.deepEqual(linkSettings({ enabled: 'sim', mode: 'xyz', service: 'evil.com' }),
-    { enabled: false, mode: 'responder', service: 'fxtwitter.com' });
+  assert.deepEqual(linkSettings(undefined), { enabled: false, mode: 'responder', service: 'fxtwitter.com', scope: 'usuarios' });
+  assert.deepEqual(linkSettings({ enabled: true, mode: 'substituir', service: 'vxtwitter.com', scope: 'usuarios' }),
+    { enabled: true, mode: 'substituir', service: 'vxtwitter.com', scope: 'usuarios' });
+  assert.deepEqual(linkSettings({ enabled: 'sim', mode: 'xyz', service: 'evil.com', scope: 'x' }),
+    { enabled: false, mode: 'responder', service: 'fxtwitter.com', scope: 'usuarios' });
 });
 
 test('escolhe entre webhook e resposta', () => {
