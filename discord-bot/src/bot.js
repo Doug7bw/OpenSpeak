@@ -22,11 +22,14 @@ import {
 } from './live.js';
 import { startWebhook } from './webhook.js';
 import { PAGES, openButtonRow, renderPanel, renderUserLinks } from './panel.js';
-import { HELP_TEXT, askGateway, findHeroInText, gatewayMessages, parseQuestion } from './ask.js';
+import { HELP_TEXT, answerGateway, answerMessages, askGateway, findHeroInText, findItemInText, gatewayMessages, officialContext, parseQuestion } from './ask.js';
 import { buildCode } from './buildcode.js';
 import { renderBuildImage } from './buildimage.js';
 import { DeadlockData, RANKS } from './deadlock.js';
-import { selectedBuild, renderBuild, renderBuildId, renderCode, renderCounters, renderHero, renderNotes, withoutAnnotations } from './dlview.js';
+import {
+  renderAnswer, renderBuild, renderBuildId, renderCode, renderCounterItems, renderCounters, renderHero, renderInfo, renderItem,
+  renderNotes, renderRanking, selectedBuild, withoutAnnotations,
+} from './dlview.js';
 import { chooseLinkAction, linkSettings, linksApplyTo, rewriteXLinks, webhookName } from './xlinks.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -116,13 +119,21 @@ function deadlockCommands() {
     .addStringOption(opt => opt.setName('heroi').setDescription('Herói (nome em inglês ou português)').setRequired(true).setAutocomplete(true))
     .addStringOption(opt => opt.setName('rank').setDescription('Filtrar por rank (padrão: todos)')
       .addChoices(...Object.entries(RANKS).map(([value, r]) => ({ name: r.label, value }))));
+  const rankOption = opt => opt.setName('rank').setDescription('Filtrar por rank (padrão: todos)')
+    .addChoices(...Object.entries(RANKS).map(([value, r]) => ({ name: r.label, value })));
   return [
-    make('build', 'Deadlock: melhor build do herói agora, com anotações e código para colar no jogo'),
-    make('counter', 'Deadlock: quem ganha do herói e de quem ele ganha'),
-    make('heroi', 'Deadlock: win rate, pick rate e médias do herói no patch'),
+    make('build', 'Deadlock: melhor build do herói agora, com anotações e ID para buscar no jogo'),
+    make('counter', 'Deadlock: quem ganha do herói, de quem ele ganha e itens contra ele'),
+    make('heroi', 'Deadlock: win rate, pick rate, lore e habilidades do herói'),
+    new SlashCommandBuilder().setName('ranking').setDescription('Deadlock: melhores e piores heróis agora (win rate e pick rate)')
+      .setContexts(...PUBLIC_CONTEXTS).addStringOption(rankOption),
+    new SlashCommandBuilder().setName('item').setDescription('Deadlock: o que faz um item, custo e win rate')
+      .setContexts(...PUBLIC_CONTEXTS)
+      .addStringOption(opt => opt.setName('item').setDescription('Item (nome em inglês ou português)').setRequired(true).setAutocomplete(true))
+      .addStringOption(rankOption),
   ];
 }
-const DEADLOCK_COMMANDS = new Set(['build', 'counter', 'heroi']);
+const DEADLOCK_COMMANDS = new Set(['build', 'counter', 'heroi', 'ranking', 'item']);
 
 const COMMANDS = [
   ADMIN_COMMAND,
@@ -554,21 +565,32 @@ class LiveBot {
     if (this.lastAsk.size > 500) this.lastAsk.delete(this.lastAsk.keys().next().value);
     message.channel.sendTyping?.().catch(() => {});
     try {
-      const heroes = await this.dl.heroes();
-      let q = parseQuestion(text, heroes);
+      const [heroes, itemMap] = await Promise.all([this.dl.heroes(), this.dl.items()]);
+      const items = [...itemMap.values()];
+      let q = parseQuestion(text, heroes, items);
       if (!q && this.gateway) {
         try {
           const ai = await askGateway(this.gateway, gatewayMessages(text, heroes));
           const hero = (ai.heroName && await this.dl.findHero(ai.heroName)) || findHeroInText(text, heroes);
-          if (ai.kind && hero) q = { kind: ai.kind, hero, rank: ai.rank };
-          else if (ai.kind && !hero) return void await reply({ content: 'De qual herói? Ex.: `@Frisquila melhor build pra seven`.' });
+          const item = (ai.itemName && await this.dl.findItem(ai.itemName)) || findItemInText(text, items);
+          // Sem o herói/item que a tela precisa, vira pergunta aberta (a IA responde com os textos oficiais).
+          const open = { kind: 'pergunta', rank: ai.rank };
+          if (ai.kind === 'pergunta') q = open;
+          else if (ai.kind === 'ranking') q = { kind: 'ranking', rank: ai.rank };
+          else if (ai.kind === 'item') q = item ? { kind: 'item', item, rank: ai.rank } : open;
+          else if (ai.kind) q = hero ? { kind: ai.kind, hero, rank: ai.rank } : open;
+          // ai.kind null = "outro" (não é de Deadlock): cai na ajuda.
         } catch (err) {
           log('pergunta livre: ia-gateway:', err.message);
         }
       }
       if (!q) return void await reply({ content: HELP_TEXT });
-      log(`pergunta livre: ${q.kind} ${q.hero.name} (${q.rank}) por ${message.author.tag}`);
-      await reply(await this.deadlockView(q.kind, q.hero, q.rank));
+      log(`pergunta livre: ${q.kind} ${q.hero?.name ?? q.item?.name ?? ''} (${q.rank}) por ${message.author.tag}`);
+      if (q.kind === 'pergunta') {
+        const answer = await answerGateway(this.gateway, answerMessages(text, officialContext(text, heroes, items)));
+        return void await reply(renderAnswer({ question: text, answer }));
+      }
+      await reply(await this.deadlockView(q.kind, q));
     } catch (err) {
       log('pergunta livre:', explain(err));
       await reply({ content: 'Não consegui buscar isso agora. Tenta de novo em alguns instantes.' }).catch(() => {});
@@ -976,19 +998,27 @@ class LiveBot {
 
   // ---------------------------------------------------------- Deadlock
 
-  /** Autocomplete do herói nos comandos de Deadlock. */
+  /** Autocomplete do herói (ou do item, no /item) nos comandos de Deadlock. */
   async onAutocomplete(interaction) {
     if (!DEADLOCK_COMMANDS.has(interaction.commandName)) return interaction.respond([]);
     try {
-      await interaction.respond(await this.dl.heroChoices(interaction.options.getFocused()));
+      const typed = interaction.options.getFocused();
+      await interaction.respond(interaction.commandName === 'item' ? await this.dl.itemChoices(typed) : await this.dl.heroChoices(typed));
     } catch (err) {
       log('deadlock: autocomplete:', explain(err));
       await interaction.respond([]).catch(() => {});
     }
   }
 
-  /** Tela de cada comando (também usada pelos botões "Build" e "Counters"). */
-  async deadlockView(kind, hero, rank, selected) {
+  /** Tela de cada comando (também usada pelos botões e pela pergunta livre). */
+  async deadlockView(kind, { hero, item, rank = 'todos', selected } = {}) {
+    if (kind === 'ranking') {
+      const [list, heroes] = await Promise.all([this.dl.ranking(rank), this.dl.heroes()]);
+      return renderRanking({ rank, list, heroes: new Map(heroes.map(h => [h.id, h])) });
+    }
+    if (kind === 'item') return renderItem({ item, rank, stats: await this.dl.itemStats(item.id, rank) });
+    if (kind === 'info') return renderInfo({ hero, rank });
+    if (kind === 'itens_contra') return renderCounterItems({ hero, rank, list: await this.dl.counterItems(hero.id, rank) });
     if (kind === 'build') {
       const { ranked, items } = await this.dl.bestBuilds(hero.id, rank);
       const current = selectedBuild(ranked, selected);
@@ -1009,12 +1039,20 @@ class LiveBot {
 
   async onDeadlockCommand(interaction) {
     await interaction.deferReply();
-    const text = interaction.options.getString('heroi', true);
+    const kind = interaction.commandName;
     const rank = interaction.options.getString('rank') ?? 'todos';
     try {
+      if (kind === 'ranking') return void await interaction.editReply(await this.deadlockView('ranking', { rank }));
+      if (kind === 'item') {
+        const text = interaction.options.getString('item', true);
+        const item = await this.dl.findItem(text);
+        if (!item) return void await interaction.editReply(`Não achei o item "${text.slice(0, 50)}". Escolha um da lista que aparece ao digitar.`);
+        return void await interaction.editReply(await this.deadlockView('item', { item, rank }));
+      }
+      const text = interaction.options.getString('heroi', true);
       const hero = await this.dl.findHero(text);
       if (!hero) return void await interaction.editReply(`Não achei o herói "${text.slice(0, 50)}". Escolha um da lista que aparece ao digitar.`);
-      await interaction.editReply({ ...(await this.deadlockView(interaction.commandName, hero, rank)), allowedMentions: { parse: [] } });
+      await interaction.editReply({ ...(await this.deadlockView(kind, { hero, rank })), allowedMentions: { parse: [] } });
     } catch (err) {
       log(`/${interaction.commandName}:`, explain(err));
       await interaction.editReply('A deadlock-api não respondeu agora. Tenta de novo em alguns instantes.').catch(() => {});
@@ -1029,13 +1067,13 @@ class LiveBot {
         await interaction.deferUpdate();
         const hero = await this.dl.findHero(a);
         // attachments: [] troca a imagem antiga pela da build escolhida.
-        await interaction.editReply({ ...(await this.deadlockView('build', hero, b ?? 'todos', Number(interaction.values[0]))), attachments: [] });
+        await interaction.editReply({ ...(await this.deadlockView('build', { hero, rank: b ?? 'todos', selected: Number(interaction.values[0]) })), attachments: [] });
         return;
       }
-      if (action === 'build' || action === 'counter') { // "Build"/"Counters": nova mensagem
+      if (['build', 'counter', 'info', 'citems'].includes(action)) { // botões entre as telas: nova mensagem
         await interaction.deferReply();
         const hero = await this.dl.findHero(a);
-        await interaction.editReply(await this.deadlockView(action, hero, b ?? 'todos'));
+        await interaction.editReply(await this.deadlockView(action === 'citems' ? 'itens_contra' : action, { hero, rank: b ?? 'todos' }));
         return;
       }
       if (action === 'id') return void await interaction.reply({ ...renderBuildId(a), flags: MessageFlags.Ephemeral });

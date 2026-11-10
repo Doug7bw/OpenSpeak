@@ -33,8 +33,8 @@ function pick(q) {
 }
 
 test('resposta da IA: JSON (mesmo com texto em volta) vira tipo, herói e rank válidos', () => {
-  assert.deepEqual(parseGatewayAnswer('{"tipo":"counter","heroi":"Billy","rank":"alto"}'), { kind: 'counter', heroName: 'Billy', rank: 'alto' });
-  assert.deepEqual(parseGatewayAnswer('Claro! {"tipo":"outro","heroi":null,"rank":"xyz"}'), { kind: null, heroName: null, rank: 'todos' });
+  assert.deepEqual(parseGatewayAnswer('{"tipo":"counter","heroi":"Billy","rank":"alto"}'), { kind: 'counter', heroName: 'Billy', itemName: null, rank: 'alto' });
+  assert.deepEqual(parseGatewayAnswer('Claro! {"tipo":"outro","heroi":null,"rank":"xyz"}'), { kind: null, heroName: null, itemName: null, rank: 'todos' });
   assert.throws(() => parseGatewayAnswer('não sei'));
   const msgs = gatewayMessages('qual o melhor herói?', HEROES);
   assert.equal(msgs[0].role, 'system');
@@ -49,11 +49,45 @@ test('cliente do gateway: resposta inválida pede de novo sem aquele provedor', 
     return { ok: true, json: async () => ({ texto, provedor: pedidos.length === 1 ? 'groq' : 'gemini', modelo: 'm' }) };
   };
   const r = await askGateway({ url: 'http://127.0.0.1:8092/', token: 'iag_x', fetchImpl }, [{ role: 'user', content: 'oi' }]);
-  assert.deepEqual(r, { kind: 'build', heroName: 'Seven', rank: 'todos' });
+  assert.deepEqual(r, { kind: 'build', heroName: 'Seven', itemName: null, rank: 'todos' });
   assert.equal(pedidos[0].url, 'http://127.0.0.1:8092/v1/chat');
   assert.equal(pedidos[0].auth, 'Bearer iag_x');
   assert.equal(pedidos[0].body.tarefa, 'frisquila');
   assert.deepEqual(pedidos[1].body.excluir, ['groq']);
   assert.equal(pedidos[1].body.rejeitado.provedor, 'groq');
   await assert.rejects(askGateway({ url: 'http://x', token: 't', fetchImpl: async () => ({ ok: false, status: 503 }) }, []));
+});
+
+const ITEMS = [
+  { id: 1, name: 'Toxic Bullets', namePt: 'Balas Tóxicas', shopable: true, slot: 'weapon', cost: 1600, desc: 'Sangramento.', keys: [normalize('Toxic Bullets'), normalize('Balas Tóxicas')] },
+  { id: 2, name: 'Decay', namePt: 'Degeneração', shopable: true, slot: 'spirit', cost: 3200, desc: 'Anticura.', keys: [normalize('Decay'), normalize('Degeneração')] },
+];
+
+test('tipos novos: info, itens contra, ranking e item', () => {
+  assert.deepEqual(pick(parseQuestion('que herói é o billy?', HEROES, ITEMS)), ['info', 'Billy', 'todos']);
+  assert.deepEqual(pick(parseQuestion('qual a lore da lady geist', HEROES, ITEMS)), ['info', 'Lady Geist', 'todos']);
+  assert.deepEqual(pick(parseQuestion('habilidades do seven', HEROES, ITEMS)), ['info', 'Seven', 'todos']);
+  assert.deepEqual(pick(parseQuestion('ordem de habilidades do seven', HEROES, ITEMS)), ['build', 'Seven', 'todos']);
+  assert.deepEqual(pick(parseQuestion('melhores itens pra counterar o haze', HEROES, ITEMS)), ['itens_contra', 'Haze', 'todos']);
+  assert.deepEqual(pick(parseQuestion('que item comprar contra billy em eternus', HEROES, ITEMS)), ['itens_contra', 'Billy', 'topo']);
+  const ranking = parseQuestion('melhores heróis agora em oracle', HEROES, ITEMS);
+  assert.deepEqual([ranking.kind, ranking.rank], ['ranking', 'alto']);
+  assert.equal(parseQuestion('tier list atual', HEROES, ITEMS).kind, 'ranking');
+  const item = parseQuestion('o que faz o toxic bullets?', HEROES, ITEMS);
+  assert.deepEqual([item.kind, item.item.name], ['item', 'Toxic Bullets']);
+  assert.equal(parseQuestion('balas tóxicas', HEROES, ITEMS).item.name, 'Toxic Bullets');
+  assert.equal(parseQuestion('como funciona a urna?', HEROES, ITEMS), null); // aberta: vai para a IA
+});
+
+test('contexto oficial para a IA: lore, habilidades e item citados', async () => {
+  const { officialContext, answerMessages } = await import('../src/ask.js');
+  const billy = { ...HEROES.find(h => h.name === 'Billy'), lore: 'Bodeficação da raiva.', role: 'brawler', tags: ['Punk'],
+    abilities: new Map([[9, { slot: 1, name: 'Bashdown', namePt: 'Tacada', desc: 'Bate o taco.' }]]) };
+  const ctx = officialContext('o decay é bom contra o billy?', [billy, ...HEROES.filter(h => h.name !== 'Billy')], ITEMS);
+  assert.match(ctx, /Bodeficação/);
+  assert.match(ctx, /Tacada \(Bashdown\): Bate o taco/);
+  assert.match(ctx, /ITEM Decay \(Degeneração\).*Anticura/);
+  const msgs = answerMessages('pergunta?', ctx);
+  assert.match(msgs[1].content, /^CONTEXTO:/);
+  assert.match(msgs[0].content, /Não invente números/);
 });

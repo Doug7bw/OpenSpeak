@@ -229,7 +229,8 @@ export function renderCounters({ hero, rank, data, heroes }) {
     )
     .setFooter(footer(rank));
   const buttons = row(
-    new ButtonBuilder().setCustomId(`dl:build:${hero.id}:${rank}`).setLabel(`Build do ${hero.name}`).setEmoji('🛠️').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(`dl:citems:${hero.id}:${rank}`).setLabel('Itens contra ele').setEmoji('🧪').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(`dl:build:${hero.id}:${rank}`).setLabel(`Build do ${hero.name}`).setEmoji('🛠️').setStyle(ButtonStyle.Secondary),
   );
   return { embeds: [embed], components: [buttons] };
 }
@@ -250,6 +251,93 @@ export function renderHero({ hero, rank, summary }) {
   const buttons = row(
     new ButtonBuilder().setCustomId(`dl:build:${hero.id}:${rank}`).setLabel('Build').setEmoji('🛠️').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId(`dl:counter:${hero.id}:${rank}`).setLabel('Counters').setEmoji('🛡️').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`dl:info:${hero.id}:${rank}`).setLabel('Lore e habilidades').setEmoji('📖').setStyle(ButtonStyle.Secondary),
   );
   return { embeds: [embed], components: [buttons] };
+}
+
+const ROLE = { brawler: 'Lutador (brawler)', marksman: 'Atirador (marksman)', mystic: 'Místico (mystic)', assassin: 'Assassino (assassin)' };
+
+/** "Que herói é esse": lore oficial, função, tags e as 4 habilidades (tudo em português, do jogo). */
+export function renderInfo({ hero, rank = 'todos' }) {
+  const embed = new EmbedBuilder().setColor(COLOR).setThumbnail(hero.card)
+    .setTitle(`📖 ${hero.namePt !== hero.name ? `${hero.name} (${hero.namePt})` : hero.name}`)
+    .setDescription(clip(hero.lore || 'Sem lore na API.', 1500));
+  const perfil = [hero.role && (ROLE[hero.role] ?? hero.role), hero.gunTag && `arma: ${hero.gunTag}`,
+    hero.complexity && `complexidade ${'★'.repeat(hero.complexity)}${'☆'.repeat(Math.max(0, 3 - hero.complexity))}`].filter(Boolean).join(' · ');
+  if (perfil) embed.addFields({ name: 'Perfil', value: perfil });
+  if (hero.tags?.length) embed.addFields({ name: 'Tags', value: hero.tags.join(', ') });
+  for (const a of [...hero.abilities.values()].sort((x, y) => x.slot - y.slot)) {
+    embed.addFields({ name: `${a.slot}. ${a.namePt !== a.name ? `${a.namePt} (${a.name})` : a.name}`, value: clip(a.desc || '—', 1024) });
+  }
+  embed.setFooter({ text: 'Lore e habilidades: textos oficiais do jogo (deadlock-api.com)' });
+  const buttons = row(
+    new ButtonBuilder().setCustomId(`dl:build:${hero.id}:${rank}`).setLabel('Build').setEmoji('🛠️').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(`dl:counter:${hero.id}:${rank}`).setLabel('Counters').setEmoji('🛡️').setStyle(ButtonStyle.Secondary),
+  );
+  return { embeds: [embed], components: [buttons] };
+}
+
+function itemName(it) {
+  return `${SLOT_EMOJI[it.slot] ?? '▫️'} **${it.name}**${it.namePt && it.namePt !== it.name ? ` (${it.namePt})` : ''}`;
+}
+
+/** "Melhores itens para counterar X": o que mais aumenta o win rate quando o inimigo é X. */
+export function renderCounterItems({ hero, rank, list }) {
+  const embed = new EmbedBuilder().setColor(COLOR).setThumbnail(hero.card).setFooter(footer(rank))
+    .setAuthor({ name: 'Itens contra', iconURL: hero.icon ?? undefined })
+    .setTitle(`🧪 Contra ${hero.name}`)
+    .setDescription(list.length
+      ? `Itens que **ganham mais do que o normal** quando o **${hero.name}** está no time inimigo (win rate contra ele vs. o win rate de sempre do item).`
+      : 'Sem partidas suficientes nesse rank para comparar.');
+  if (list.length) {
+    embed.addFields({
+      name: 'Itens',
+      value: list.map((x, i) => `${i + 1}. ${itemName(x.item)} — **+${dec(x.gain * 100)} pp** (${pct(x.winRate)} vs ${pct(x.base)}) · ${num(x.matches)} partidas`).join('\n'),
+    });
+  }
+  const buttons = row(
+    new ButtonBuilder().setCustomId(`dl:counter:${hero.id}:${rank}`).setLabel(`Quem ganha do ${hero.name}`).setEmoji('🛡️').setStyle(ButtonStyle.Secondary),
+  );
+  return { embeds: [embed], components: [buttons] };
+}
+
+/** Ranking de heróis por win rate (o "meta" do patch). */
+export function renderRanking({ rank, list, heroes }) {
+  const line = (x, i) => `${i + 1}. **${heroes.get(x.heroId)?.name ?? `#${x.heroId}`}** — ${pct(x.winRate)} · pick ${pct(x.pickRate)}`;
+  const embed = new EmbedBuilder().setColor(COLOR).setFooter(footer(rank))
+    .setTitle('🏆 Melhores heróis agora')
+    .setDescription('Win rate de cada herói no período (e pick rate: em quantas partidas ele aparece).')
+    .addFields(
+      { name: '🔥 Top 10', value: list.slice(0, 10).map(line).join('\n') || '—', inline: false },
+      { name: '🥶 Os 5 de baixo', value: list.slice(-5).map((x, i) => line(x, list.length - 5 + i)).join('\n') || '—', inline: false },
+    );
+  return { embeds: [embed], components: [] };
+}
+
+/** "O que faz o item X": descrição oficial, custo, tipo e win rate. */
+export function renderItem({ item, stats, rank = 'todos' }) {
+  const SLOT_NAME = { weapon: 'Arma', vitality: 'Vitalidade', spirit: 'Espiritual' };
+  const embed = new EmbedBuilder().setColor(COLOR).setFooter(footer(rank))
+    .setTitle(`${SLOT_EMOJI[item.slot] ?? ''} ${item.namePt !== item.name ? `${item.name} (${item.namePt})` : item.name}`)
+    .setDescription(clip(item.desc || 'Sem descrição na API.', 2000))
+    .addFields(
+      { name: 'Tipo', value: SLOT_NAME[item.slot] ?? item.slot ?? '—', inline: true },
+      { name: 'Custo', value: item.cost ? num(item.cost) : '—', inline: true },
+      { name: 'Tier', value: item.tier ? String(item.tier) : '—', inline: true },
+    );
+  if (stats) {
+    embed.addFields({ name: 'Win rate', value: `**${pct(stats.winRate)}** em ${num(stats.matches)} partidas${stats.buyTime ? ` · comprado em média aos ${Math.round(stats.buyTime / 60)} min` : ''}` });
+  }
+  if (item.image) embed.setThumbnail(item.image);
+  return { embeds: [embed], components: [] };
+}
+
+/** Resposta livre da IA (lore, mecânicas…), marcada como tal. */
+export function renderAnswer({ question, answer }) {
+  const embed = new EmbedBuilder().setColor(COLOR)
+    .setAuthor({ name: `💬 ${clip(question.replace(/\s+/g, ' '), 200)}` })
+    .setDescription(clip(answer, 3500))
+    .setFooter({ text: 'Resposta da IA (ia-gateway), com os textos oficiais do jogo quando há · pode errar' });
+  return { embeds: [embed], components: [] };
 }

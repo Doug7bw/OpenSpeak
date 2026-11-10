@@ -188,3 +188,36 @@ test('imagem da build: PNG com as seções na ordem do jogo; sem ícone, iniciai
   const sem = renderBuild({ hero, rank: 'todos', ranked, items });
   assert.ok(sem.embeds[0].toJSON().fields.some(f => f.value.includes('Item Teste'))); // sem imagem: lista em texto
 });
+
+test('itens contra, ranking, texto do jogo e as telas novas', async () => {
+  const { stripHtml, counterItems, heroRanking } = await import('../src/deadlock.js');
+  const { renderInfo, renderCounterItems, renderRanking, renderItem, renderAnswer } = await import('../src/dlview.js');
+  assert.equal(stripHtml('<span class="x">Passiva:</span> cura<br>mais <img src="a.png"> &amp; dano'), 'Passiva: cura\nmais & dano');
+
+  const items = new Map([[1, { name: 'Decay', namePt: 'Degeneração', slot: 'spirit', shopable: true }],
+    [2, { name: 'Velho', slot: 'weapon', shopable: false }], [3, { name: 'Ruim', slot: 'weapon', shopable: true }]]);
+  const vs = [{ item_id: 1, wins: 5300, matches: 10000 }, { item_id: 2, wins: 9000, matches: 10000 }, { item_id: 3, wins: 4000, matches: 10000 }];
+  const all = [{ item_id: 1, wins: 5000, matches: 10000 }, { item_id: 2, wins: 5000, matches: 10000 }, { item_id: 3, wins: 5000, matches: 10000 }];
+  const list = counterItems(vs, all, items);
+  assert.deepEqual(list.map(x => x.item.name), ['Decay']); // removido do jogo e "ganho" negativo ficam fora
+  assert.ok(Math.abs(list[0].gain - 0.03) < 1e-9);
+
+  const rank = heroRanking([{ hero_id: 1, wins: 40, matches: 100 }, { hero_id: 2, wins: 60, matches: 100 }]);
+  assert.deepEqual(rank.map(r => r.heroId), [2, 1]);
+
+  const heroMap = new Map([[1, { name: 'A' }], [2, { name: 'B' }]]);
+  const msgs = [
+    renderInfo({ hero: { ...hero, lore: 'x'.repeat(3000), role: 'brawler', tags: ['Punk'], complexity: 2, gunTag: 'Close Range',
+      abilities: new Map([[1, { slot: 1, name: 'A', namePt: 'Á', desc: 'y'.repeat(2000) }]]) } }),
+    renderCounterItems({ hero, rank: 'todos', list }),
+    renderRanking({ rank: 'todos', list: rank, heroes: heroMap }),
+    renderItem({ item: { name: 'Decay', namePt: 'Degeneração', slot: 'spirit', cost: 3200, tier: 3, desc: 'Anticura.' }, stats: { winRate: 0.5, matches: 9, buyTime: 900 } }),
+    renderAnswer({ question: 'qual a lore?', answer: 'z'.repeat(5000) }),
+  ];
+  for (const m of msgs) {
+    const e = m.embeds[0].toJSON();
+    for (const f of e.fields ?? []) assert.ok(f.value.length <= 1024 && f.value.length > 0, f.name);
+    assert.ok((e.description ?? '').length <= 4096);
+    m.components.forEach(r => r.toJSON());
+  }
+});
