@@ -222,7 +222,8 @@ export class DeadlockData {
     const ptName = new Map(pt.map(h => [h.id, h.name]));
     const ptItem = new Map(itemsPt.map(i => [i.id, i]));
     const byClass = new Map(items.filter(i => i.type === 'ability').map(i => [i.class_name, i]));
-    return en.filter(h => h.player_selectable && !h.disabled && !h.in_development).map(h => {
+    // Sem filtrar "in_development": heróis novos (Baba, Violet) já estão nas partidas com essa marca.
+    return en.filter(h => h.player_selectable && !h.disabled).map(h => {
       const abilities = new Map();
       for (let n = 1; n <= 4; n++) {
         const a = byClass.get(h.items?.[`signature${n}`]);
