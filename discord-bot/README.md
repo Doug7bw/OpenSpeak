@@ -127,7 +127,7 @@ acima; padrão: todos).
 
 | Comando | O que mostra |
 |---|---|
-| `/build heroi:Seven` | A melhor build publicada agora: itens por seção, **da esquerda para a direita** como no jogo, ordem de habilidades, win rate e partidas, quando foi atualizada. Botões: **Código para o jogo**, **Ver anotações** (item a item) e **Counters**; menu com as outras 4 melhores |
+| `/build heroi:Seven` | A melhor build publicada agora: itens por seção, **da esquerda para a direita** como no jogo, ordem de habilidades, win rate e partidas, quando foi atualizada. Mostra o **ID para buscar no jogo**; botões: **Copiar ID**, **Ver anotações** (item a item) e **Counters**; menu com as outras 4 melhores |
 | `/counter heroi:Billy` | Quem mais ganha do herói e de quem ele mais ganha, com o número de partidas |
 | `/heroi heroi:Haze` | Win rate (e posição entre os heróis), pick rate e médias por partida |
 
@@ -142,7 +142,7 @@ intervalo de Wilson (win rate "garantido" pelo número de partidas), com:
 - castigo para builds em idiomas que o servidor não lê (fora inglês/português)
   e para as que têm itens que saíram do jogo.
 
-**Código para o jogo.** É o mesmo formato que o jogo exporta: base64 de um zstd
+**ID ou código.** Build publicada se acha no jogo pelo ID (o `/build` sempre usa builds publicadas, então mostra o ID). O **código para colar no jogo** fica para builds sem ID, montadas na hora. É o mesmo formato que o jogo exporta: base64 de um zstd
 de um protobuf `CMsgHeroBuild` (`src/buildcode.js`; o teste confere byte a byte
 com um código exportado pelo jogo). O jogo só exige o `hero_build_id` (como o
 bot usa builds publicadas, ele é o ID real). Acima de 2000 caracteres o código

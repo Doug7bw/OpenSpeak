@@ -24,7 +24,7 @@ import { startWebhook } from './webhook.js';
 import { PAGES, openButtonRow, renderPanel, renderUserLinks } from './panel.js';
 import { buildCode } from './buildcode.js';
 import { DeadlockData, RANKS } from './deadlock.js';
-import { renderBuild, renderCode, renderCounters, renderHero, renderNotes, withoutAnnotations } from './dlview.js';
+import { renderBuild, renderBuildId, renderCode, renderCounters, renderHero, renderNotes, withoutAnnotations } from './dlview.js';
 import { chooseLinkAction, linkSettings, linksApplyTo, rewriteXLinks, webhookName } from './xlinks.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -982,6 +982,7 @@ class LiveBot {
         await interaction.editReply(await this.deadlockView(action, hero, b ?? 'todos'));
         return;
       }
+      if (action === 'id') return void await interaction.reply({ ...renderBuildId(a), flags: MessageFlags.Ephemeral });
       if (action === 'code' || action === 'notes') { // só para quem clicou
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const entry = await this.dl.build(Number(a));
