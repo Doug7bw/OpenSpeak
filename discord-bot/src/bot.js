@@ -13,7 +13,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   ActivityType, ChannelType, Client, EmbedBuilder, GatewayIntentBits, InteractionContextType, MessageFlags,
-  MessageType, PermissionFlagsBits, Routes,
+  MessageType, Partials, PermissionFlagsBits, Routes,
   SlashCommandBuilder,
 } from 'discord.js';
 import {
@@ -31,6 +31,8 @@ const STATE_FILE = path.resolve(process.env.OPENSPEAK_BOT_STATE ?? path.join(ROO
 const OFFLINE_AFTER_FAILURES = 4;
 /** Intervalo mínimo entre trocas do status do bot (limite do Discord). */
 const PRESENCE_MIN_MS = 5000;
+/** Respostas de links lembradas para refletir edição/exclusão da original (as mais recentes). */
+const LINK_REPLIES_MAX = 2000;
 
 const log = (...args) => console.log(new Date().toISOString(), ...args);
 
@@ -156,6 +158,10 @@ class LiveBot {
     this.queue = Promise.resolve(); // consultas e webhooks, um de cada vez
     this.liveUrl = new URL('/api/live', config.openspeakUrl).toString();
     this.webhooks = new Map(); // canal -> Promise<Webhook> (um webhook do bot por canal)
+    // Modo responder: original -> resposta do bot, para refletir edição e exclusão (só em memória).
+    this.linkReplies = new Map();
+    this.deletedOriginals = new Set();
+    this.handledEdits = new Set();
     this.messageIntent = true; // false se o Message Content Intent não está ativo no portal
   }
 
@@ -487,15 +493,22 @@ class LiveBot {
     return linkSettings(this.state.guilds[guildId]?.links);
   }
 
+  /** Links a corrigir nesta mensagem (servidor ligado e a pessoa no alcance), ou null. */
+  linkFix(message) {
+    // Bots e webhooks (inclusive os nossos reenvios) nunca: evita loop.
+    if (!message.inGuild() || message.author?.bot || message.webhookId || message.system) return null;
+    if (message.type !== MessageType.Default && message.type !== MessageType.Reply) return null;
+    const settings = this.links(message.guildId);
+    if (!linksApplyTo(settings, this.state.users[message.author.id]?.links)) return null;
+    const { content, links } = rewriteXLinks(message.content, settings.service);
+    return links.length ? { settings, content, links } : null;
+  }
+
   /** Mensagem nova em algum servidor: corrige os links do X se o servidor ligou. */
   async onMessage(message) {
-    // Bots e webhooks (inclusive os nossos reenvios) nunca: evita loop.
-    if (!message.inGuild() || message.author.bot || message.webhookId || message.system) return;
-    if (message.type !== MessageType.Default && message.type !== MessageType.Reply) return;
-    const settings = this.links(message.guildId);
-    if (!linksApplyTo(settings, this.state.users[message.author.id]?.links)) return;
-    const { content, links } = rewriteXLinks(message.content, settings.service);
-    if (!links.length) return;
+    const fix = this.linkFix(message);
+    if (!fix) return;
+    const { settings, content, links } = fix;
 
     const channel = message.channel;
     const thread = channel.isThread();
@@ -527,13 +540,71 @@ class LiveBot {
       }
     }
     try {
-      await message.reply({
+      const reply = await message.reply({
         content: links.join('\n'),
         allowedMentions: { parse: [], repliedUser: false },
         failIfNotExists: false,
       });
+      // O autor apagou enquanto o bot respondia: some com a resposta também.
+      if (this.deletedOriginals.has(message.id)) return void reply.delete().catch(() => {});
+      this.linkReplies.set(message.id, { reply, content: message.content });
+      while (this.linkReplies.size > LINK_REPLIES_MAX) this.linkReplies.delete(this.linkReplies.keys().next().value);
     } catch (err) {
       log('links: falha ao responder:', explain(err));
+    }
+  }
+
+  /** A mensagem original foi apagada: apaga a resposta do bot junto. */
+  async onMessageDelete(messageId) {
+    this.deletedOriginals.add(messageId);
+    if (this.deletedOriginals.size > LINK_REPLIES_MAX) this.deletedOriginals.delete(this.deletedOriginals.values().next().value);
+    const tracked = this.linkReplies.get(messageId);
+    if (!tracked) return;
+    this.linkReplies.delete(messageId);
+    await tracked.reply.delete().catch(err => {
+      if (err?.code !== 10008) log('links: falha ao apagar a resposta:', explain(err));
+    });
+  }
+
+  /**
+   * A mensagem original foi editada: atualiza a resposta com os links novos, apaga
+   * se os links saíram, ou corrige se a edição trouxe um link que antes não tinha.
+   * O Discord também manda "edições" quando a prévia carrega ou é suprimida: sem
+   * mudança no texto, não faz nada.
+   */
+  async onMessageUpdate(message, before = null) {
+    // Sem o texto anterior (mensagem fora do cache, ex.: depois de reiniciar) não dá
+    // para saber se o bot já respondeu: não cria resposta nova, só atualiza as lembradas.
+    const hadLinks = !before || before.partial || rewriteXLinks(before.content).links.length > 0;
+    if (message.partial) {
+      try {
+        message = await message.fetch();
+      } catch {
+        return; // apagada ou sem acesso
+      }
+    }
+    const tracked = this.linkReplies.get(message.id);
+    if (!tracked) {
+      if (!hadLinks && !this.handledEdits.has(message.id) && this.linkFix(message)) {
+        this.handledEdits.add(message.id); // um link novo por edição: corrige uma vez
+        if (this.handledEdits.size > LINK_REPLIES_MAX) this.handledEdits.delete(this.handledEdits.values().next().value);
+        await this.onMessage(message);
+      }
+      return;
+    }
+    if (tracked.content === message.content) return;
+    tracked.content = message.content;
+    const fix = this.linkFix(message);
+    try {
+      if (!fix) {
+        this.linkReplies.delete(message.id);
+        await tracked.reply.delete();
+      } else if (tracked.reply.content !== fix.links.join('\n')) {
+        tracked.reply = await tracked.reply.edit({ content: fix.links.join('\n'), allowedMentions: { parse: [], repliedUser: false } });
+      }
+    } catch (err) {
+      if (err?.code === 10008) this.linkReplies.delete(message.id); // alguém apagou a resposta
+      else log('links: falha ao atualizar a resposta:', explain(err));
     }
   }
 
@@ -889,7 +960,8 @@ let bot;
 function createClient(readMessages) {
   const intents = [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates];
   if (readMessages) intents.push(GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent);
-  const c = new Client({ intents });
+  // Partials.Message: avisa edição/exclusão mesmo de mensagens que saíram do cache.
+  const c = new Client({ intents, partials: [Partials.Message] });
   c.once('clientReady', () => onReady(c, readMessages).catch(err => log('erro ao iniciar:', err)));
   c.on('interactionCreate', interaction => {
     if (!bot) return;
@@ -909,6 +981,15 @@ function createClient(readMessages) {
   });
   c.on('messageCreate', message => {
     bot?.onMessage(message).catch(err => log('links:', explain(err)));
+  });
+  c.on('messageUpdate', (before, after) => {
+    bot?.onMessageUpdate(after, before).catch(err => log('links:', explain(err)));
+  });
+  c.on('messageDelete', message => {
+    bot?.onMessageDelete(message.id).catch(err => log('links:', explain(err)));
+  });
+  c.on('messageDeleteBulk', messages => {
+    for (const id of messages.keys()) bot?.onMessageDelete(id).catch(err => log('links:', explain(err)));
   });
   return c;
 }

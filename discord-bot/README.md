@@ -95,6 +95,12 @@ No modo substituir:
   perderia a referência), tem **anexo**, figurinha ou enquete, ficaria com mais
   de 2000 caracteres, ou falta **Gerenciar webhooks** / **Gerenciar mensagens**.
 
+No modo responder, a resposta acompanha a original: se o autor **apaga** a
+mensagem, a resposta some junto; se **edita**, ela passa a ter os links novos
+(ou some, se ele tirou os links); e um link do X **adicionado numa edição** é
+corrigido como numa mensagem nova. O vínculo fica só na memória (as últimas
+2000 respostas): depois de reiniciar o bot, mensagens antigas não são acompanhadas.
+
 Mensagens de bots e de webhooks são ignoradas (sem loop), e links entre `< >`
 (o autor pediu sem prévia) ficam como estão. Sem permissão para responder no
 canal, o bot só registra no log.
