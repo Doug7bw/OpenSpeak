@@ -43,3 +43,6 @@ o OpenSpeak a partir deste repositório.
 | Componente | Licença |
 |---|---|
 | [discord.js](https://github.com/discordjs/discord.js) (e dependências `@discordjs/*`) | Apache-2.0 |
+| [@napi-rs/canvas](https://github.com/Brooooooklyn/canvas) (imagem das builds do Deadlock) | MIT |
+| [Noto Sans](https://github.com/notofonts/latin-greek-cyrillic) (`discord-bot/assets/fonts`, texto da imagem) | SIL Open Font License 1.1 (`assets/fonts/OFL.txt`) |
+| Dados de Deadlock: [deadlock-api.com](https://deadlock-api.com) (API pública, consultada em tempo real; nada é redistribuído) | — |

@@ -167,3 +167,24 @@ test('build publicada mostra o ID (sem botão de código); sem ID, o botão do c
   const unpublished = renderBuild({ hero, rank: 'todos', ranked: mk(0), items: allItems });
   assert.match(unpublished.components.at(-1).toJSON().components[0].custom_id, /^dl:code:/);
 });
+
+test('imagem da build: PNG com as seções na ordem do jogo; sem ícone, iniciais', async () => {
+  const { renderBuildImage, layoutSections, imageHeight } = await import('../src/buildimage.js');
+  const sections = layoutSections(fixture.hero_build);
+  assert.equal(sections.length, fixture.hero_build.details.mod_categories.filter(c => c.mods?.length).length);
+  assert.ok(imageHeight(sections) > 200);
+  const items = new Map(fixture.hero_build.details.mod_categories.flatMap(c => c.mods)
+    .map(m => [m.ability_id, { name: 'Item Teste', slot: 'weapon', cost: 800, shopable: true, image: 'https://x/icone.png' }]));
+  const png = await renderBuildImage({ build: fixture.hero_build, items, fetchImpl: async () => ({ ok: false }) });
+  assert.deepEqual([...png.subarray(1, 4)], [0x50, 0x4e, 0x47]); // "PNG"
+  assert.equal(await renderBuildImage({ build: { details: { mod_categories: [] } }, items }), null);
+
+  const ranked = rankBuilds([{ hero_build_id: 722319, matches: 1000, wins: 550 }], new Map([[722319, fixture]]), items, { minMatches: 10 });
+  const msg = renderBuild({ hero, rank: 'todos', ranked, items, image: png });
+  const embed = msg.embeds[0].toJSON();
+  assert.equal(embed.image.url, 'attachment://build.png');
+  assert.equal(msg.files.length, 1);
+  assert.ok(!embed.fields.some(f => f.name === 'Early game')); // itens só na imagem
+  const sem = renderBuild({ hero, rank: 'todos', ranked, items });
+  assert.ok(sem.embeds[0].toJSON().fields.some(f => f.value.includes('Item Teste'))); // sem imagem: lista em texto
+});

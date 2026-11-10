@@ -131,6 +131,10 @@ acima; padrão: todos).
 | `/counter heroi:Billy` | Quem mais ganha do herói e de quem ele mais ganha, com o número de partidas |
 | `/heroi heroi:Haze` | Win rate (e posição entre os heróis), pick rate e médias por partida |
 
+Os itens do `/build` vão numa **imagem** (`src/buildimage.js`): cada seção com os ícones da esquerda para a direita, numerados, com moldura na cor do tipo (laranja arma, verde vitalidade, roxo espiritual) e o custo; item que saiu do jogo aparece riscado. A fonte (Noto Sans, OFL) fica em `assets/fonts`, porque a VM não tem fontes. Se a imagem falhar, a lista vai em texto.
+
+**Pergunta livre.** Mencione o bot: `@Frisquila melhor build pra seven`, `@Frisquila quem countera o billy?`, `@Frisquila haze tá forte em eternus?`. O bot entende sozinho quando acha o herói (inglês, português ou apelido) e uma palavra-chave (build/itens, counter/contra, forte/meta/win rate) e o rank citado; quando não, pergunta ao [ia-gateway](https://github.com/JonasHenriqueDev/ia-gateway) (tarefa `frisquila`), que só classifica a pergunta: os números vêm sempre da deadlock-api. A resposta é a mesma tela do comando. Configuração: `"iaGateway": {"url": "http://127.0.0.1:8092", "token": "iag_…"}` no `config.json` (ou `IA_GATEWAY_URL`/`IA_GATEWAY_TOKEN`); sem isso, só o entendimento local. Uma pergunta por pessoa a cada 4 s.
+
 **Como a build é escolhida.** O `hero-build-stats` diz, para cada build
 publicada, quantas partidas e vitórias teve quem **começou a partida com ela**
 no período. O bot pega as 15 mais jogadas e ordena pelo limite inferior do

@@ -54,7 +54,16 @@ function buildStats(c) {
 }
 
 /** Tela principal do /build: a build escolhida (a melhor, por padrão) e as outras no menu. */
-export function renderBuild({ hero, rank, ranked, items, selected }) {
+/** A build mostrada: a escolhida no menu ou, por padrão, a melhor. */
+export function selectedBuild(ranked, selected) {
+  return ranked.find(c => c.id === selected) ?? ranked[0] ?? null;
+}
+
+/**
+ * Tela principal do /build. Com `image` (PNG de buildimage.js), os itens vão na imagem e o
+ * texto fica curto; sem ela (falhou ao desenhar), a lista de itens vai em texto.
+ */
+export function renderBuild({ hero, rank, ranked, items, selected, image }) {
   if (!ranked.length) {
     return {
       embeds: [new EmbedBuilder().setColor(COLOR).setTitle(`Sem builds de ${hero.name} com partidas suficientes`)
@@ -63,7 +72,7 @@ export function renderBuild({ hero, rank, ranked, items, selected }) {
       components: [],
     };
   }
-  const current = ranked.find(c => c.id === selected) ?? ranked[0];
+  const current = selectedBuild(ranked, selected);
   const b = current.entry.hero_build;
   const best = current === ranked[0];
   const embed = new EmbedBuilder()
@@ -83,11 +92,12 @@ export function renderBuild({ hero, rank, ranked, items, selected }) {
   // No PC, clique duplo no número seleciona só ele (o Discord não tem clicar-para-copiar).
   if (b.hero_build_id) embed.addFields({ name: '🔎 ID para buscar no jogo', value: '**`' + b.hero_build_id + '`**' });
   const cats = (b.details?.mod_categories ?? []).filter(c => c.mods?.length);
-  for (const c of cats.slice(0, 7)) {
+  if (image) embed.setImage('attachment://build.png');
+  for (const c of image ? [] : cats.slice(0, 7)) {
     const list = c.mods.map(m => itemLabel(items, m.ability_id)).join(' → ');
     embed.addFields({ name: `${categoryName(c.name)}${c.optional ? ' (opcional)' : ''}`, value: clip(list, 1024) });
   }
-  if (cats.length > 7) embed.addFields({ name: '…', value: `+${cats.length - 7} seções no jogo e nas anotações.` });
+  if (!image && cats.length > 7) embed.addFields({ name: '…', value: `+${cats.length - 7} seções no jogo e nas anotações.` });
   const abilities = abilityOrder(b, hero);
   if (abilities) embed.addFields({ name: '🎯 Habilidades', value: abilities });
   if (current.removed) embed.addFields({ name: '⚠️ Atenção', value: `${current.removed} item(ns) desta build saíram do jogo.` });
@@ -106,7 +116,11 @@ export function renderBuild({ hero, rank, ranked, items, selected }) {
       .setDisabled(!current.annotated),
     new ButtonBuilder().setCustomId(`dl:counter:${hero.id}:${rank}`).setLabel('Counters').setEmoji('🛡️').setStyle(ButtonStyle.Secondary),
   );
-  return { embeds: [embed], components: ranked.length > 1 ? [row(menu), buttons] : [buttons] };
+  return {
+    embeds: [embed],
+    components: ranked.length > 1 ? [row(menu), buttons] : [buttons],
+    files: image ? [new AttachmentBuilder(image, { name: 'build.png' })] : [],
+  };
 }
 
 /** ID da build publicada (privado): só o número no texto, fácil de copiar no celular. */

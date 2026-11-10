@@ -22,9 +22,11 @@ import {
 } from './live.js';
 import { startWebhook } from './webhook.js';
 import { PAGES, openButtonRow, renderPanel, renderUserLinks } from './panel.js';
+import { HELP_TEXT, askGateway, findHeroInText, gatewayMessages, parseQuestion } from './ask.js';
 import { buildCode } from './buildcode.js';
+import { renderBuildImage } from './buildimage.js';
 import { DeadlockData, RANKS } from './deadlock.js';
-import { renderBuild, renderBuildId, renderCode, renderCounters, renderHero, renderNotes, withoutAnnotations } from './dlview.js';
+import { selectedBuild, renderBuild, renderBuildId, renderCode, renderCounters, renderHero, renderNotes, withoutAnnotations } from './dlview.js';
 import { chooseLinkAction, linkSettings, linksApplyTo, rewriteXLinks, webhookName } from './xlinks.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -34,6 +36,8 @@ const STATE_FILE = path.resolve(process.env.OPENSPEAK_BOT_STATE ?? path.join(ROO
 const OFFLINE_AFTER_FAILURES = 4;
 /** Intervalo mínimo entre trocas do status do bot (limite do Discord). */
 const PRESENCE_MIN_MS = 5000;
+/** Uma pergunta livre por pessoa a cada tantos ms (evita enxurrada na API e no gateway). */
+const ASK_COOLDOWN_MS = 4000;
 /** Respostas de links lembradas para refletir edição/exclusão da original (as mais recentes). */
 const LINK_REPLIES_MAX = 2000;
 
@@ -184,6 +188,11 @@ class LiveBot {
     this.deletedOriginals = new Set();
     this.handledEdits = new Set();
     this.dl = new DeadlockData({ log }); // dados de Deadlock (deadlock-api.com), com cache
+    // ia-gateway (rodízio de IA compartilhado): só para perguntas livres que o bot não entende sozinho.
+    const gw = baseConfig.iaGateway ?? {};
+    this.gateway = (process.env.IA_GATEWAY_URL || gw.url) && (process.env.IA_GATEWAY_TOKEN || gw.token)
+      ? { url: process.env.IA_GATEWAY_URL || gw.url, token: process.env.IA_GATEWAY_TOKEN || gw.token } : null;
+    this.lastAsk = new Map(); // usuário -> quando perguntou
     this.messageIntent = true; // false se o Message Content Intent não está ativo no portal
   }
 
@@ -525,6 +534,45 @@ class LiveBot {
     if (!linksApplyTo(settings, this.state.users[message.author.id]?.links)) return null;
     const { content, links } = rewriteXLinks(message.content, settings.service);
     return links.length ? { settings, content, links } : null;
+  }
+
+  /**
+   * "@Frisquila melhor build pra seven": entende sozinho quando dá (herói + palavra-chave) e,
+   * se não der, pergunta ao ia-gateway. A resposta é a mesma tela do /build, /counter ou /heroi.
+   */
+  async onMention(message) {
+    if (!message.inGuild() || message.author.bot || message.webhookId) return;
+    const me = this.client.user.id;
+    // Só menção escrita (responder uma mensagem do bot também "menciona", mas não é pergunta).
+    if (!new RegExp(`<@!?${me}>`).test(message.content)) return;
+    const text = message.content.replace(/<@!?\d+>/g, ' ').trim();
+    const reply = payload => message.reply({ ...payload, allowedMentions: { parse: [], repliedUser: false } });
+    if (!text) return void await reply({ content: HELP_TEXT });
+    const last = this.lastAsk.get(message.author.id) ?? 0;
+    if (Date.now() - last < ASK_COOLDOWN_MS) return;
+    this.lastAsk.set(message.author.id, Date.now());
+    if (this.lastAsk.size > 500) this.lastAsk.delete(this.lastAsk.keys().next().value);
+    message.channel.sendTyping?.().catch(() => {});
+    try {
+      const heroes = await this.dl.heroes();
+      let q = parseQuestion(text, heroes);
+      if (!q && this.gateway) {
+        try {
+          const ai = await askGateway(this.gateway, gatewayMessages(text, heroes));
+          const hero = (ai.heroName && await this.dl.findHero(ai.heroName)) || findHeroInText(text, heroes);
+          if (ai.kind && hero) q = { kind: ai.kind, hero, rank: ai.rank };
+          else if (ai.kind && !hero) return void await reply({ content: 'De qual herói? Ex.: `@Frisquila melhor build pra seven`.' });
+        } catch (err) {
+          log('pergunta livre: ia-gateway:', err.message);
+        }
+      }
+      if (!q) return void await reply({ content: HELP_TEXT });
+      log(`pergunta livre: ${q.kind} ${q.hero.name} (${q.rank}) por ${message.author.tag}`);
+      await reply(await this.deadlockView(q.kind, q.hero, q.rank));
+    } catch (err) {
+      log('pergunta livre:', explain(err));
+      await reply({ content: 'Não consegui buscar isso agora. Tenta de novo em alguns instantes.' }).catch(() => {});
+    }
   }
 
   /** Mensagem nova em algum servidor: corrige os links do X se o servidor ligou. */
@@ -943,7 +991,14 @@ class LiveBot {
   async deadlockView(kind, hero, rank, selected) {
     if (kind === 'build') {
       const { ranked, items } = await this.dl.bestBuilds(hero.id, rank);
-      return renderBuild({ hero, rank, ranked, items, selected });
+      const current = selectedBuild(ranked, selected);
+      let image = null;
+      try { // imagem dos itens; se falhar, a lista vai em texto
+        if (current) image = await renderBuildImage({ build: current.entry.hero_build, items });
+      } catch (err) {
+        log('deadlock: imagem da build:', err.message);
+      }
+      return renderBuild({ hero, rank, ranked, items, selected, image });
     }
     if (kind === 'counter') {
       const [data, heroes] = await Promise.all([this.dl.counters(hero.id, rank), this.dl.heroes()]);
@@ -973,7 +1028,8 @@ class LiveBot {
       if (action === 'pick') { // outra build no menu: troca a mesma mensagem
         await interaction.deferUpdate();
         const hero = await this.dl.findHero(a);
-        await interaction.editReply(await this.deadlockView('build', hero, b ?? 'todos', Number(interaction.values[0])));
+        // attachments: [] troca a imagem antiga pela da build escolhida.
+        await interaction.editReply({ ...(await this.deadlockView('build', hero, b ?? 'todos', Number(interaction.values[0]))), attachments: [] });
         return;
       }
       if (action === 'build' || action === 'counter') { // "Build"/"Counters": nova mensagem
@@ -1094,6 +1150,7 @@ function createClient(readMessages) {
   });
   c.on('messageCreate', message => {
     bot?.onMessage(message).catch(err => log('links:', explain(err)));
+    bot?.onMention(message).catch(err => log('pergunta livre:', explain(err)));
   });
   c.on('messageUpdate', (before, after) => {
     bot?.onMessageUpdate(after, before).catch(err => log('links:', explain(err)));
