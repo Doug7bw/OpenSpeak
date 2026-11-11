@@ -1,3 +1,10 @@
+# OpenSpeak 1.0.40 — sem G-Sync no OpenSpeak
+
+- Com o **G-Sync** ligado também em janela, as placas NVIDIA faziam o monitor
+  seguir o OpenSpeak como se ele fosse um jogo, e a tela podia piscar ou o jogo
+  aberto ao lado engasgar. Agora o app desliga o G-Sync só para ele mesmo; os
+  jogos continuam com o G-Sync normalmente.
+
 # OpenSpeak 1.0.39 — áudio da janela e captura alternativa
 
 - **Som da janela corrigido:** às vezes a transmissão de uma janela ia sem
