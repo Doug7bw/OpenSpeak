@@ -246,3 +246,88 @@ export const HELP_TEXT = 'Pode me perguntar qualquer coisa de **Deadlock**. Por 
   + '• `@Frisquila que herói é o vindicta?`\n• `@Frisquila melhores heróis agora`\n• `@Frisquila o que faz o toxic bullets?`\n'
   + '• `@Frisquila qual a lore do cultista?`\n'
   + 'Ou use `/frisquila pergunta:…`, `/build`, `/counter`, `/heroi`, `/ranking` e `/item`.';
+
+// ------------------------------------------------ "Por quê?" dos itens contra
+
+/** Palavras que marcam item de "ferramenta" (stun, silêncio, barreira, anticura…) nas descrições oficiais. */
+const UTILITY_WORDS = /atordo|silenci|barreira|escudo|malef[ií]cio|imun|anticura|cura[s]? recebida|interromp|canaliz|desarm|enraiz|adormec|desaceler|lentid|reduzid|instância de|stun|silence|barrier|immun|debuff|heal reduction|interrupt|channel/i;
+
+const flat = s => String(s ?? '').replace(/\s+/g, ' ').trim();
+
+/**
+ * Itens que a IA pode citar: os melhores da estatística contra o herói (com o ganho)
+ * e os de ferramenta, todos com a descrição oficial. Ela só escolhe desta lista.
+ */
+export function counterCandidates(statList, items, { max = 60 } = {}) {
+  const out = new Map();
+  for (const x of statList.slice(0, 10)) out.set(x.item.id, { item: x.item, gain: x.gain });
+  const tools = [...items].filter(i => i.shopable && i.desc && UTILITY_WORDS.test(i.desc) && !out.has(i.id))
+    .sort((a, b) => (a.tier ?? 0) - (b.tier ?? 0) || a.name.localeCompare(b.name));
+  for (const item of tools) {
+    if (out.size >= max) break;
+    out.set(item.id, { item, gain: null });
+  }
+  return [...out.values()];
+}
+
+/** Prompt do "Por quê?": habilidades oficiais do herói + itens candidatos; resposta em JSON. */
+export function counterReasonMessages(hero, candidates) {
+  const abilities = [...(hero.abilities?.values?.() ?? [])].sort((a, b) => a.slot - b.slot)
+    .map(a => `${a.slot}. ${a.namePt}${a.name !== a.namePt ? ` (${a.name})` : ''}: ${flat(a.desc).slice(0, 400)}`);
+  const list = candidates.map(c => `- ${c.item.name}${c.item.namePt !== c.item.name ? ` (${c.item.namePt})` : ''}`
+    + `${c.gain != null ? ` [+${(c.gain * 100).toFixed(1)} pp de win rate contra ele]` : ''}: ${flat(c.item.desc).slice(0, 220)}`);
+  return [
+    {
+      role: 'system',
+      content: 'Você é o Frisquila, bot de Discord que entende de Deadlock. Recebe as HABILIDADES oficiais de um herói e uma '
+        + 'lista de ITENS com a descrição oficial. Escolha de 3 a 4 itens DA LISTA que respondem a habilidades específicas do '
+        + 'herói (ex.: atordoamento ou silêncio interrompem habilidade canalizada; barreira ou redução de dano contra dano '
+        + 'explosivo de uma habilidade; anticura contra cura; imunidade contra controle). Use só o que está escrito nas '
+        + 'descrições, sem inventar números nem efeitos. Prefira itens com ganho de win rate quando fizer sentido. '
+        + 'Responda SÓ com JSON: {"itens":[{"item":"<nome em inglês exatamente como na lista>","habilidade":"<nome da '
+        + 'habilidade do herói>","motivo":"<português do Brasil, até 30 palavras>"}]}',
+    },
+    { role: 'user', content: `HERÓI: ${hero.name} (${hero.namePt})\n\nHABILIDADES:\n${abilities.join('\n')}\n\nITENS:\n${list.join('\n')}` },
+  ];
+}
+
+/** Valida a resposta: só itens da lista e habilidades do herói. Lança erro se nada sobrar. */
+export function parseCounterReasons(texto, hero, candidates) {
+  const m = /\{[\s\S]*\}/.exec(String(texto ?? ''));
+  if (!m) throw new Error('sem JSON');
+  const d = JSON.parse(m[0]);
+  const norm = s => normalize(String(s ?? ''));
+  const byName = new Map();
+  for (const c of candidates) for (const n of [c.item.name, c.item.namePt]) byName.set(norm(n), c);
+  const abilities = [...(hero.abilities?.values?.() ?? [])];
+  const seen = new Set();
+  const out = [];
+  for (const x of Array.isArray(d.itens) ? d.itens : []) {
+    const c = byName.get(norm(x?.item));
+    const motivo = flat(x?.motivo).slice(0, 300);
+    if (!c || !motivo || seen.has(c.item.id)) continue;
+    seen.add(c.item.id);
+    const ability = abilities.find(a => [a.name, a.namePt].some(n => norm(n) === norm(x?.habilidade))) ?? null;
+    out.push({ item: c.item, gain: c.gain, ability, motivo });
+    if (out.length === 4) break;
+  }
+  if (!out.length) throw new Error('nenhum item válido');
+  return out;
+}
+
+/** Pede o "Por quê?" ao ia-gateway (tarefa "frisquila_resposta"); troca de provedor se a resposta não validar. */
+export async function counterReasonGateway(cfg, hero, candidates) {
+  const mensagens = counterReasonMessages(hero, candidates);
+  const excluir = [];
+  let rejeitado = null;
+  for (let i = 0; i < 3; i++) {
+    const data = await callGateway(cfg, { tarefa: 'frisquila_resposta', mensagens, json: true, temperatura: 0.2, max_tokens: 600, excluir, rejeitado, timeout_s: 20 }, 60_000);
+    try {
+      return parseCounterReasons(data.texto, hero, candidates);
+    } catch (err) {
+      excluir.push(data.provedor);
+      rejeitado = { provedor: data.provedor, modelo: data.modelo, motivo: err.message };
+    }
+  }
+  throw new Error('ia-gateway: nenhuma resposta válida');
+}

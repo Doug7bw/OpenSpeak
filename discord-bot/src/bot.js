@@ -22,12 +22,12 @@ import {
 } from './live.js';
 import { startWebhook } from './webhook.js';
 import { PAGES, openButtonRow, renderPanel, renderUserLinks } from './panel.js';
-import { HELP_TEXT, isBeginnerQuestion, answerGateway, answerMessages, askGateway, findHeroInText, findItemInText, gatewayMessages, officialContext, parseQuestion } from './ask.js';
+import { HELP_TEXT, counterCandidates, counterReasonGateway, isBeginnerQuestion, answerGateway, answerMessages, askGateway, findHeroInText, findItemInText, gatewayMessages, officialContext, parseQuestion } from './ask.js';
 import { buildCode } from './buildcode.js';
 import { renderBuildImage } from './buildimage.js';
 import { DeadlockData, RANKS } from './deadlock.js';
 import {
-  renderAnswer, renderBuild, renderBuildId, renderCode, renderCounterItems, renderCounters, renderHero, renderInfo, renderItem,
+  renderAnswer, renderBuild, renderCounterReasons, renderBuildId, renderCode, renderCounterItems, renderCounters, renderHero, renderInfo, renderItem,
   renderNotes, renderRanking, selectedBuild, withoutAnnotations,
 } from './dlview.js';
 import { LINK_NETWORKS, chooseLinkAction, linkSettings, linksApplyTo, rewriteLinks, webhookName } from './xlinks.js';
@@ -41,6 +41,8 @@ const OFFLINE_AFTER_FAILURES = 4;
 const PRESENCE_MIN_MS = 5000;
 /** Uma pergunta livre por pessoa a cada tantos ms (evita enxurrada na API e no gateway). */
 const ASK_COOLDOWN_MS = 4000;
+/** Explicação do "Por quê?" por herói+rank: guardada por 30 min (os números mudam devagar). */
+const COUNTER_WHY_TTL_MS = 30 * 60_000;
 /** Respostas de links lembradas para refletir edição/exclusão da original (as mais recentes). */
 const LINK_REPLIES_MAX = 2000;
 
@@ -208,6 +210,7 @@ class LiveBot {
     this.gateway = (process.env.IA_GATEWAY_URL || gw.url) && (process.env.IA_GATEWAY_TOKEN || gw.token)
       ? { url: process.env.IA_GATEWAY_URL || gw.url, token: process.env.IA_GATEWAY_TOKEN || gw.token } : null;
     this.lastAsk = new Map(); // usuário -> quando perguntou
+    this.counterWhy = new Map(); // "heroi|rank" -> {at, reasons} do botão Por quê?
     this.messageIntent = true; // false se o Message Content Intent não está ativo no portal
   }
 
@@ -1132,6 +1135,7 @@ class LiveBot {
         return;
       }
       if (action === 'id') return void await interaction.reply({ ...renderBuildId(a), flags: MessageFlags.Ephemeral });
+      if (action === 'why') return void await this.onCounterWhy(interaction, a, b ?? 'todos');
       if (action === 'code' || action === 'notes') { // só para quem clicou
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const entry = await this.dl.build(Number(a));
@@ -1153,6 +1157,26 @@ class LiveBot {
       if (interaction.deferred || interaction.replied) await interaction.editReply({ content: msg, embeds: [], components: [] }).catch(() => {});
       else await interaction.reply({ content: msg, flags: MessageFlags.Ephemeral }).catch(() => {});
     }
+  }
+
+  /** "🧠 Por quê?" na tela de itens contra: a IA liga itens a habilidades (só para quem clicou). */
+  async onCounterWhy(interaction, heroId, rank) {
+    if (!this.gateway)
+      return void await interaction.reply({ content: 'A explicação usa o ia-gateway, que não está configurado neste bot.', flags: MessageFlags.Ephemeral });
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    const hero = await this.dl.findHero(heroId);
+    if (!hero) return void await interaction.editReply('Não achei esse herói.');
+    const key = `${hero.id}|${rank}`;
+    let cached = this.counterWhy.get(key);
+    if (!cached || Date.now() - cached.at > COUNTER_WHY_TTL_MS) {
+      const [list, items] = await Promise.all([this.dl.counterItems(hero.id, rank), this.dl.items()]);
+      const reasons = await counterReasonGateway(this.gateway, hero, counterCandidates(list, items.values()));
+      cached = { at: Date.now(), reasons };
+      this.counterWhy.set(key, cached);
+      if (this.counterWhy.size > 100) this.counterWhy.delete(this.counterWhy.keys().next().value);
+      log(`deadlock: por quê contra ${hero.name} (${rank}): ${reasons.map(r => r.item.name).join(', ')}`);
+    }
+    await interaction.editReply(renderCounterReasons({ hero, rank, reasons: cached.reasons }));
   }
 
   async onCommand(interaction) {

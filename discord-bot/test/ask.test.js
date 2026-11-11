@@ -92,3 +92,54 @@ test('contexto oficial para a IA: lore, habilidades e item citados', async () =>
   assert.match(msgs[0].content, /nunca invente/);
   assert.match(msgs[0].content, /FATOS:\n.*Valve/);
 });
+
+test('"Por quê?" dos itens contra: só itens da lista, ligados a habilidades do herói', async () => {
+  const { counterCandidates, counterReasonMessages, parseCounterReasons, counterReasonGateway } = await import('../src/ask.js');
+  const { renderCounterReasons, renderCounterItems } = await import('../src/dlview.js');
+  const it = (id, name, namePt, desc, tier = 1) => ({ id, name, namePt, desc, tier, slot: 'vitality', shopable: true });
+  const knockdown = it(1, 'Knockdown', 'Nocaute', 'Aplica um atordoamento após 2s.', 3);
+  const spellbreaker = it(2, 'Spellbreaker', 'Quebra-Magias', 'A próxima instância de dano espiritual alto sofrido é reduzida.', 4);
+  const decay = it(3, 'Decay', 'Degeneração', 'Causa dano por segundo.', 3);
+  const boring = it(4, 'Extra Health', 'Vida Extra', 'Mais vida.');
+  const items = [knockdown, spellbreaker, decay, boring, { ...it(5, 'Velho', 'Velho', 'atordoamento'), shopable: false }];
+  const list = [{ item: decay, gain: 0.03 }];
+  const cand = counterCandidates(list, items);
+  assert.deepEqual(cand.map(c => c.item.name), ['Decay', 'Knockdown', 'Spellbreaker']); // estatística + ferramentas, sem fora da loja
+  assert.equal(cand[0].gain, 0.03);
+
+  const hero = { id: 9, name: 'Seven', namePt: 'Seven', abilities: new Map([[4, { slot: 4, name: 'Storm Cloud', namePt: 'Nuvem Tempestuosa', desc: 'Canaliza uma nuvem.' }]]) };
+  const msgs = counterReasonMessages(hero, cand);
+  assert.match(msgs[1].content, /Nuvem Tempestuosa/);
+  assert.match(msgs[1].content, /Knockdown \(Nocaute\): Aplica um atordoamento/);
+  assert.match(msgs[1].content, /Decay \(Degeneração\) \[\+3\.0 pp/);
+
+  const answer = JSON.stringify({ itens: [
+    { item: 'nocaute', habilidade: 'Storm Cloud', motivo: 'O atordoamento cancela a nuvem canalizada.' },
+    { item: 'Inventado', habilidade: 'x', motivo: 'não existe' },
+    { item: 'Spellbreaker', habilidade: 'Habilidade falsa', motivo: 'Reduz um golpe forte.' },
+    { item: 'Knockdown', habilidade: 'Storm Cloud', motivo: 'repetido' },
+  ] });
+  const reasons = parseCounterReasons(`ok: ${answer}`, hero, cand);
+  assert.deepEqual(reasons.map(r => r.item.name), ['Knockdown', 'Spellbreaker']);
+  assert.equal(reasons[0].ability.namePt, 'Nuvem Tempestuosa');
+  assert.equal(reasons[1].ability, null);
+  assert.throws(() => parseCounterReasons('{"itens":[{"item":"Inventado","motivo":"x"}]}', hero, cand), /nenhum item/);
+
+  // Resposta inválida: troca de provedor e tenta de novo.
+  const calls = [];
+  const fetchImpl = async (url, opts) => {
+    const body = JSON.parse(opts.body);
+    calls.push(body);
+    return { ok: true, json: async () => ({ provedor: `p${calls.length}`, texto: calls.length === 1 ? 'sem json' : answer }) };
+  };
+  const got = await counterReasonGateway({ url: 'http://x', token: 't', fetchImpl }, hero, cand);
+  assert.equal(got.length, 2);
+  assert.equal(calls[0].tarefa, 'frisquila_resposta');
+  assert.deepEqual(calls[1].excluir, ['p1']);
+
+  const e = renderCounterReasons({ hero, reasons }).embeds[0].toJSON();
+  assert.match(e.description, /\*\*Knockdown \(Nocaute\)\*\* → contra \*Nuvem Tempestuosa\*/);
+  assert.match(e.footer.text, /IA/);
+  const buttons = renderCounterItems({ hero, rank: 'alto', list }).components[0].toJSON().components;
+  assert.equal(buttons[0].custom_id, 'dl:why:9:alto');
+});

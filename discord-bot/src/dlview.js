@@ -297,9 +297,26 @@ export function renderCounterItems({ hero, rank, list }) {
     });
   }
   const buttons = row(
+    new ButtonBuilder().setCustomId(`dl:why:${hero.id}:${rank}`).setLabel('Por quê?').setEmoji('🧠').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId(`dl:counter:${hero.id}:${rank}`).setLabel(`Quem ganha do ${hero.name}`).setEmoji('🛡️').setStyle(ButtonStyle.Secondary),
   );
   return { embeds: [embed], components: [buttons] };
+}
+
+/** "🧠 Por quê?": itens escolhidos pela IA, cada um ligado a uma habilidade do herói. */
+export function renderCounterReasons({ hero, rank = 'todos', reasons }) {
+  const lines = reasons.map(r => {
+    const name = r.item.namePt && r.item.namePt !== r.item.name ? `${r.item.name} (${r.item.namePt})` : r.item.name;
+    const vs = r.ability ? ` → contra *${r.ability.namePt}*` : '';
+    const stat = r.gain != null ? ` · +${dec(r.gain * 100)} pp` : '';
+    return `${SLOT_EMOJI[r.item.slot] ?? '•'} **${name}**${vs}${stat}\n${r.motivo}`;
+  });
+  const embed = new EmbedBuilder().setColor(COLOR).setThumbnail(hero.card)
+    .setAuthor({ name: 'Itens contra · por quê', iconURL: hero.icon ?? undefined })
+    .setTitle(`🧠 Como counterar ${hero.name}`)
+    .setDescription(clip(lines.join('\n\n'), 3800))
+    .setFooter({ text: `Dica da IA com as descrições oficiais das habilidades e itens · pode errar · ${footer(rank).text}` });
+  return { embeds: [embed], components: [] };
 }
 
 /** Ranking de heróis por win rate (o "meta" do patch). */

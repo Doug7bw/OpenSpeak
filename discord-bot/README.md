@@ -146,7 +146,7 @@ acima; padrão: todos).
 | `/ranking [rank]` | Os 10 melhores e os 5 piores heróis por win rate, com pick rate |
 | `/item item:Toxic Bullets` | Descrição oficial (em português), tipo, custo, tier e win rate do item |
 
-O `/counter` também tem o botão **Itens contra ele**: os itens que ganham **mais que o normal** quando aquele herói está no time inimigo (win rate do item contra ele menos o win rate de sempre do item, só com partidas suficientes nos dois).
+O `/counter` também tem o botão **Itens contra ele**: os itens que ganham **mais que o normal** quando aquele herói está no time inimigo (win rate do item contra ele menos o win rate de sempre do item, só com partidas suficientes nos dois). Nessa tela, o botão **🧠 Por quê?** (só quem clicou vê) pede ao ia-gateway (tarefa `frisquila_resposta`) 3 ou 4 itens ligados a habilidades do herói, por exemplo Knockdown contra uma ult canalizada ou Spellbreaker contra um golpe espiritual forte. A IA recebe só as descrições oficiais das 4 habilidades e de uma lista fechada de itens (os 10 melhores da estatística mais os de ferramenta: atordoamento, silêncio, barreira, anticura, imunidade, lentidão…; `counterCandidates` em `src/ask.js`); item fora da lista é descartado (`parseCounterReasons`). A explicação fica guardada por 30 min por herói e rank.
 
 Os itens do `/build` vão numa **imagem** (`src/buildimage.js`): cada seção com os ícones da esquerda para a direita, numerados, com moldura na cor do tipo (laranja arma, verde vitalidade, roxo espiritual) e o custo; item que saiu do jogo aparece riscado. A fonte (Noto Sans, OFL) fica em `assets/fonts`, porque a VM não tem fontes. Se a imagem falhar, a lista vai em texto.
 
