@@ -93,6 +93,16 @@ test('contexto oficial para a IA: lore, habilidades e item citados', async () =>
   assert.match(msgs[0].content, /FATOS:\n.*Valve/);
 });
 
+test('marcas das habilidades e itens pelo texto oficial', async () => {
+  const { abilityTags, itemTags } = await import('../src/ask.js');
+  assert.deepEqual(abilityTags('Canaliza uma nuvem tempestuosa, causando dano.'), ['CANALIZADA', 'DANO']);
+  assert.deepEqual(abilityTags('Causa dano espiritual e aplica um congelamento temporal.'), ['CONTROLE', 'DANO']);
+  assert.deepEqual(itemTags('Aplica um atordoamento após 2s.'), ['ATORDOA']);
+  assert.deepEqual(itemTags('Ganha uma barreira quando for atordoado, acorrentado ou silenciado.'), ['CONTRA_CONTROLE', 'DEFESA_DE_DANO']);
+  assert.deepEqual(itemTags('Reduz o efeito de desacelerações de movimento causadas pelos inimigos.'), ['CONTRA_LENTIDÃO']);
+  assert.deepEqual(itemTags('O seu dano espiritual reduz as curas recebidas por inimigos.'), ['ANTICURA']);
+});
+
 test('"Por quê?" dos itens contra: só itens da lista, ligados a habilidades do herói', async () => {
   const { counterCandidates, counterReasonMessages, parseCounterReasons, counterReasonGateway } = await import('../src/ask.js');
   const { renderCounterReasons, renderCounterItems } = await import('../src/dlview.js');
@@ -110,7 +120,8 @@ test('"Por quê?" dos itens contra: só itens da lista, ligados a habilidades do
   const hero = { id: 9, name: 'Seven', namePt: 'Seven', abilities: new Map([[4, { slot: 4, name: 'Storm Cloud', namePt: 'Nuvem Tempestuosa', desc: 'Canaliza uma nuvem.' }]]) };
   const msgs = counterReasonMessages(hero, cand);
   assert.match(msgs[1].content, /Nuvem Tempestuosa/);
-  assert.match(msgs[1].content, /Knockdown \(Nocaute\): Aplica um atordoamento/);
+  assert.match(msgs[1].content, /Nuvem Tempestuosa \(Storm Cloud\) \[CANALIZADA\]/);
+  assert.match(msgs[1].content, /Knockdown \(Nocaute\) \[ATORDOA\]: Aplica um atordoamento/);
   assert.match(msgs[1].content, /Decay \(Degeneração\) \[\+3\.0 pp/);
 
   const answer = JSON.stringify({ itens: [
@@ -124,6 +135,10 @@ test('"Por quê?" dos itens contra: só itens da lista, ligados a habilidades do
   assert.equal(reasons[0].ability.namePt, 'Nuvem Tempestuosa');
   assert.equal(reasons[1].ability, null);
   assert.throws(() => parseCounterReasons('{"itens":[{"item":"Inventado","motivo":"x"}]}', hero, cand), /nenhum item/);
+  // Anticura contra habilidade sem cura: descartada.
+  const healbane = it(6, 'Healbane', 'Maldição Anticura', 'O seu dano espiritual reduz as curas recebidas por inimigos.');
+  const withHb = [...cand, { item: healbane, gain: null }];
+  assert.throws(() => parseCounterReasons(JSON.stringify({ itens: [{ item: 'Healbane', habilidade: 'Storm Cloud', motivo: 'corta cura' }] }), hero, withHb), /nenhum item/);
 
   // Resposta inválida: troca de provedor e tenta de novo.
   const calls = [];

@@ -250,7 +250,7 @@ export const HELP_TEXT = 'Pode me perguntar qualquer coisa de **Deadlock**. Por 
 // ------------------------------------------------ "Por quê?" dos itens contra
 
 /** Palavras que marcam item de "ferramenta" (stun, silêncio, barreira, anticura…) nas descrições oficiais. */
-const UTILITY_WORDS = /atordo|silenci|barreira|escudo|malef[ií]cio|imun|anticura|cura[s]? recebida|interromp|canaliz|desarm|enraiz|adormec|desaceler|lentid|reduzid|instância de|stun|silence|barrier|immun|debuff|heal reduction|interrupt|channel/i;
+const UTILITY_WORDS = /congel|atordo|silenci|barreira|escudo|malef[ií]cio|imun|anticura|cura[s]? recebida|interromp|canaliz|desarm|enraiz|adormec|desaceler|lentid|reduzid|instância de|stun|silence|barrier|immun|debuff|heal reduction|interrupt|channel/i;
 
 const flat = s => String(s ?? '').replace(/\s+/g, ' ').trim();
 
@@ -270,25 +270,71 @@ export function counterCandidates(statList, items, { max = 60 } = {}) {
   return [...out.values()];
 }
 
-/** Prompt do "Por quê?": habilidades oficiais do herói + itens candidatos; resposta em JSON. */
+/** Marcas tiradas do texto oficial de uma habilidade (o que ela faz que dá para responder com item). */
+export function abilityTags(desc) {
+  const d = String(desc ?? '').toLowerCase();
+  const tags = [];
+  if (/canaliz|channel/.test(d)) tags.push('CANALIZADA');
+  if (/atordo|silenci|imobiliz|acorrent|adormec|enraiz|desarm|puxa|congel|troca a sua posição|stun|silence/.test(d)) tags.push('CONTROLE');
+  if (/malef[ií]cio|debuff/.test(d)) tags.push('MALEFÍCIO');
+  if (/\bcura|regenera|roubo de vida|heal|lifesteal/.test(d)) tags.push('CURA');
+  if (/desaceler|lentid|slow/.test(d)) tags.push('LENTIDÃO');
+  if (/dano|damage/.test(d)) tags.push('DANO');
+  return tags;
+}
+
+/** Marcas tiradas do texto oficial de um item (que tipo de resposta ele dá). */
+export function itemTags(desc) {
+  const d = String(desc ?? '').toLowerCase();
+  const tags = [];
+  const against = /quando for atordoado|imune a atordoamentos|suprime .*malef|remove .*malef|reduz .*malef/.test(d);
+  if (/atordo|stun/.test(d) && !against) tags.push('ATORDOA');
+  if (/silenci|silence/.test(d) && !against) tags.push('SILENCIA');
+  if (against) tags.push('CONTRA_CONTROLE');
+  if (/anticura|curas recebidas|cura recebida|heal reduction/.test(d)) tags.push('ANTICURA');
+  if (/barreira|escudo|reduzid|instância de|imune a balas|barrier/.test(d)) tags.push('DEFESA_DE_DANO');
+  const antiSlow = /reduz .*(desacelera|lentid)/.test(d);
+  if (/desaceler|lentid|slow/.test(d) && !antiSlow) tags.push('DESACELERA');
+  if (antiSlow) tags.push('CONTRA_LENTIDÃO');
+  return tags;
+}
+
+/** Prompt do "Por quê?": habilidades oficiais do herói + itens candidatos (com marcas); resposta em JSON. */
 export function counterReasonMessages(hero, candidates) {
+  const tagText = t => (t.length ? ` [${t.join(', ')}]` : '');
   const abilities = [...(hero.abilities?.values?.() ?? [])].sort((a, b) => a.slot - b.slot)
-    .map(a => `${a.slot}. ${a.namePt}${a.name !== a.namePt ? ` (${a.name})` : ''}: ${flat(a.desc).slice(0, 400)}`);
-  const list = candidates.map(c => `- ${c.item.name}${c.item.namePt !== c.item.name ? ` (${c.item.namePt})` : ''}`
+    .map(a => `${a.slot}. ${a.namePt}${a.name !== a.namePt ? ` (${a.name})` : ''}${tagText(abilityTags(a.desc))}: ${flat(a.desc).slice(0, 400)}`);
+  const list = candidates.map(c => `- ${c.item.name}${c.item.namePt !== c.item.name ? ` (${c.item.namePt})` : ''}${tagText(itemTags(c.item.desc))}`
     + `${c.gain != null ? ` [+${(c.gain * 100).toFixed(1)} pp de win rate contra ele]` : ''}: ${flat(c.item.desc).slice(0, 220)}`);
   return [
     {
       role: 'system',
       content: 'Você é o Frisquila, bot de Discord que entende de Deadlock. Recebe as HABILIDADES oficiais de um herói e uma '
-        + 'lista de ITENS com a descrição oficial. Escolha de 3 a 4 itens DA LISTA que respondem a habilidades específicas do '
-        + 'herói (ex.: atordoamento ou silêncio interrompem habilidade canalizada; barreira ou redução de dano contra dano '
-        + 'explosivo de uma habilidade; anticura contra cura; imunidade contra controle). Use só o que está escrito nas '
-        + 'descrições, sem inventar números nem efeitos. Prefira itens com ganho de win rate quando fizer sentido. '
+        + 'lista de ITENS com a descrição oficial; entre colchetes vão marcas tiradas desses textos. Escolha de 3 a 4 itens DA '
+        + 'LISTA que respondem a uma habilidade específica do herói, seguindo estas regras:\n'
+        + '- habilidade CANALIZADA → item que ATORDOA ou SILENCIA (interrompe o canal);\n'
+        + '- habilidade de CONTROLE (atordoa, silencia, congela, puxa, troca de lugar…) ou que aplica MALEFÍCIO → item CONTRA_CONTROLE;\n'
+        + '- habilidade de LENTIDÃO → item CONTRA_LENTIDÃO;\n'
+        + '- habilidade com CURA → item ANTICURA (nunca anticura contra habilidade sem CURA);\n'
+        + '- habilidade de DANO forte (a principal fonte de dano) → item DEFESA_DE_DANO que combine com o tipo do dano '
+        + '(espiritual ou de balas, como está nas descrições).\n'
+        + 'Use só o que está escrito nas descrições, sem inventar números nem efeitos. Entre opções parecidas, prefira a que '
+        + 'tem ganho de win rate. No motivo, diga em 1 ou 2 frases o que a habilidade faz e como o efeito do item responde. '
         + 'Responda SÓ com JSON: {"itens":[{"item":"<nome em inglês exatamente como na lista>","habilidade":"<nome da '
-        + 'habilidade do herói>","motivo":"<português do Brasil, até 30 palavras>"}]}',
+        + 'habilidade do herói>","motivo":"<português do Brasil, até 40 palavras>"}]}',
     },
     { role: 'user', content: `HERÓI: ${hero.name} (${hero.namePt})\n\nHABILIDADES:\n${abilities.join('\n')}\n\nITENS:\n${list.join('\n')}` },
   ];
+}
+
+/** Ligações que as marcas desmentem (ex.: anticura contra habilidade sem cura). */
+function contradicts(item, ability) {
+  if (!ability) return false;
+  const it = itemTags(item.desc), ab = abilityTags(ability.desc);
+  if (it.includes('ANTICURA') && !ab.includes('CURA') && !it.some(t => ['ATORDOA', 'SILENCIA', 'DEFESA_DE_DANO'].includes(t))) return true;
+  if (it.includes('CONTRA_CONTROLE') && !ab.some(t => t === 'CONTROLE' || t === 'MALEFÍCIO') && !it.includes('DEFESA_DE_DANO')) return true;
+  if (it.length === 1 && it[0] === 'CONTRA_LENTIDÃO' && !ab.includes('LENTIDÃO')) return true;
+  return false;
 }
 
 /** Valida a resposta: só itens da lista e habilidades do herói. Lança erro se nada sobrar. */
@@ -308,6 +354,7 @@ export function parseCounterReasons(texto, hero, candidates) {
     if (!c || !motivo || seen.has(c.item.id)) continue;
     seen.add(c.item.id);
     const ability = abilities.find(a => [a.name, a.namePt].some(n => norm(n) === norm(x?.habilidade))) ?? null;
+    if (contradicts(c.item, ability)) continue;
     out.push({ item: c.item, gain: c.gain, ability, motivo });
     if (out.length === 4) break;
   }
