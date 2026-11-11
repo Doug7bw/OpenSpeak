@@ -63,7 +63,19 @@ Quem transmite escolhe por transmissão: **Configurações avançadas → "Mostr
 vivo no bot do Discord"** (ligado por padrão), no app nativo e no cliente web.
 Transmissões com a opção desligada não aparecem em lugar nenhum.
 
-## Links do X/Twitter
+## Links (X/Twitter, TikTok e Instagram)
+
+O bot corrige links de três redes para a prévia (com o vídeo tocando) funcionar no Discord, tirando o rastreio:
+
+| Rede | Vira | Quais links |
+|---|---|---|
+| X/Twitter | `fxtwitter.com` (ou `fixupx.com` / `vxtwitter.com`) | posts (`/usuario/status/ID`) |
+| TikTok | [`tnktok.com`](https://github.com/okdargy/fxtiktok) | vídeos, fotos e links curtos (`vm.`/`vt.tiktok.com`, `/t/…`); perfis ficam como estão |
+| Instagram | [`uuinstagram.com`](https://uuinstagram.com) | reels, posts e IGTV (`/reel/`, `/reels/`, `/p/`, `/tv/`, com ou sem o perfil antes) |
+
+No painel (`/painel` → 🔗 Links) dá para escolher quais redes corrigir em cada servidor (as três vêm ligadas) e o serviço do X. O resto abaixo (modos, alcance, `/links`, edição/exclusão) vale para as três.
+
+### Detalhes
 
 O Discord costuma mostrar a prévia de posts do X quebrada. Ligando em
 `/painel` → 🔗 Links do X/Twitter, o bot troca links de post

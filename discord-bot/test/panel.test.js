@@ -101,3 +101,14 @@ test('quem tem os links corrigidos: opt-in por pessoa ou alcance "todos"', () =>
   assert.equal(linksApplyTo(all, false), false);
   assert.equal(linksApplyTo(linkSettings({ enabled: false, scope: 'todos' }), true), false);
 });
+
+test('página do Deadlock: botão alterna entre respostas públicas e só para quem pediu', () => {
+  const pub = check(renderPanel('deadlock', view()));
+  const button = pub.rows[1].components[0];
+  assert.equal(button.custom_id, 'os:t:dl:deadlock');
+  assert.equal(button.style, 2); // públicas (padrão): desligado
+  assert.match(pub.embeds[0].fields[0].value, /Públicas/);
+  const eph = check(renderPanel('deadlock', view({ deadlock: { ephemeral: true } })));
+  assert.equal(eph.rows[1].components[0].style, 3);
+  assert.match(eph.embeds[0].fields[0].value, /Só para quem pediu/);
+});

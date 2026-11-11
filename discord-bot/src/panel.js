@@ -8,7 +8,7 @@ import {
   ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelSelectMenuBuilder, ChannelType, EmbedBuilder,
   RoleSelectMenuBuilder, StringSelectMenuBuilder,
 } from 'discord.js';
-import { LINK_SERVICES } from './xlinks.js';
+import { LINK_NETWORKS, LINK_SERVICES } from './xlinks.js';
 
 export const BRAND = 0x1fa2ff;
 const OFF = 0x4f545c;
@@ -17,7 +17,8 @@ export const PAGES = {
   inicio: { label: 'Visão geral', emoji: '🏠', description: 'Tudo o que o bot faz neste servidor' },
   chat: { label: 'Avisos no chat', emoji: '💬', description: 'Mensagem quando alguém começa a transmitir' },
   voz: { label: 'Status do canal de voz', emoji: '🔊', description: 'Quem está ao vivo, embaixo do nome da call' },
-  links: { label: 'Links do X/Twitter', emoji: '🔗', description: 'Troca por fxtwitter para a prévia funcionar' },
+  links: { label: 'Links (X, TikTok, Instagram)', emoji: '🔗', description: 'Troca o link para a prévia funcionar no Discord' },
+  deadlock: { label: 'Deadlock', emoji: '🎮', description: 'Respostas públicas ou só para quem pediu' },
   status: { label: 'Status do bot', emoji: '🤖', description: 'O status do bot na lista de membros (global)' },
 };
 
@@ -97,7 +98,8 @@ function voiceSummary(c) {
 
 function linksSummary(l) {
   if (!l.enabled) return '⚪ Desligado';
-  return `🟢 ${LINK_MODES_INFO[l.mode].label}\n${l.service}\n${LINK_SCOPES_INFO[l.scope].label}`;
+  const nets = Object.entries(LINK_NETWORKS).filter(([n]) => l.networks?.[n]).map(([, i]) => i.emoji).join(' ') || 'nenhuma rede';
+  return `🟢 ${LINK_MODES_INFO[l.mode].label}\n${nets}\n${LINK_SCOPES_INFO[l.scope].label}`;
 }
 
 const spacer = { name: '​', value: '​', inline: true };
@@ -157,27 +159,42 @@ export function renderPanel(page, v) {
 
   if (page === 'links') {
     const l = v.links;
-    const embed = baseEmbed(v, '🔗 Links do X/Twitter', l.enabled)
-      .setDescription(describe(v, 'O Discord costuma mostrar a prévia de posts do X quebrada. O bot troca o link por um serviço que mostra '
-        + 'a prévia certa (texto, fotos e vídeo) e tira o rastreio (`?s=20`). '
+    const embed = baseEmbed(v, '🔗 Links (X, TikTok, Instagram)', l.enabled)
+      .setDescription(describe(v, 'O Discord costuma mostrar a prévia de posts do X, vídeos do TikTok e reels do Instagram quebrada. '
+        + 'O bot troca o link por um serviço que mostra a prévia certa (vídeo tocando no Discord, fotos e texto) e tira o rastreio: '
+        + 'X → fxtwitter (ou o serviço escolhido), TikTok → tnktok.com, Instagram → uuinstagram.com. '
         + 'Com o alcance **Só quem ativar**, cada pessoa liga para si com `/links`.'))
       .addFields(
         { name: 'Situação', value: onOff(l.enabled), inline: true },
         { name: 'Modo', value: `${LINK_MODES_INFO[l.mode].emoji} ${LINK_MODES_INFO[l.mode].label}`, inline: true },
         { name: 'Alcance', value: `${LINK_SCOPES_INFO[l.scope].emoji} ${LINK_SCOPES_INFO[l.scope].label}`, inline: true },
-        { name: 'Serviço', value: `🌐 ${l.service}`, inline: true },
+        { name: 'Redes', value: Object.entries(LINK_NETWORKS).map(([n, i]) => `${l.networks?.[n] ? '🟢' : '⚪'} ${i.emoji} ${i.label}`).join('\n'), inline: true },
+        { name: 'Serviço do X', value: `🌐 ${l.service}`, inline: true },
       );
     if (v.warnings.links.length) embed.addFields({ name: '⚠️ Atenção', value: v.warnings.links.join('\n') });
     const mode = new StringSelectMenuBuilder().setCustomId('os:linkmode').setPlaceholder('Modo…')
       .addOptions(Object.entries(LINK_MODES_INFO).map(([value, m]) => ({ value, ...m, default: value === l.mode })));
     const scope = new StringSelectMenuBuilder().setCustomId('os:linkscope').setPlaceholder('Alcance…')
       .addOptions(Object.entries(LINK_SCOPES_INFO).map(([value, m]) => ({ value, ...m, default: value === l.scope })));
-    const service = new StringSelectMenuBuilder().setCustomId('os:linkservice').setPlaceholder('Serviço…')
-      .addOptions(LINK_SERVICES.map(s => ({ value: s, label: s, emoji: '🌐', default: s === l.service })));
+    // Serviço do X em botões (ao lado do liga/desliga) para caber o menu das redes.
+    const services = LINK_SERVICES.map(s => new ButtonBuilder().setCustomId(`os:linkservice:${s}:links`).setLabel(s)
+      .setStyle(s === l.service ? ButtonStyle.Primary : ButtonStyle.Secondary).setDisabled(s === l.service));
+    const nets = new StringSelectMenuBuilder().setCustomId('os:linknets').setPlaceholder('Quais redes corrigir…')
+      .setMinValues(0).setMaxValues(Object.keys(LINK_NETWORKS).length)
+      .addOptions(Object.entries(LINK_NETWORKS).map(([value, n]) => ({ value, ...n, default: !!l.networks?.[value] })));
     return {
       embeds: [embed],
-      components: [nav, row(toggleButton('links', l.enabled, { label: 'Links do X', page })), row(mode), row(scope), row(service)],
+      components: [nav, row(toggleButton('links', l.enabled, { label: 'Links', page }), ...services), row(mode), row(scope), row(nets)],
     };
+  }
+
+  if (page === 'deadlock') {
+    const ephemeral = v.deadlock?.ephemeral === true;
+    const embed = baseEmbed(v, '🎮 Deadlock')
+      .setDescription(describe(v, 'Como aparecem as respostas de `/build`, `/counter`, `/heroi`, `/item` e `/ranking` (e dos botões delas) neste servidor: '
+        + '**públicas**, para todo mundo do canal ver, ou **só para quem pediu** (mensagem que só a pessoa vê).'))
+      .addFields({ name: 'Respostas', value: ephemeral ? '🙈 **Só para quem pediu**' : '👥 **Públicas**', inline: true });
+    return { embeds: [embed], components: [nav, row(toggleButton('dl', ephemeral, { label: 'Só para quem pediu', page }))] };
   }
 
   if (page === 'status') {
@@ -201,7 +218,7 @@ export function renderPanel(page, v) {
       { name: '💬 Avisos no chat', value: chatSummary(v.chat), inline: true },
       { name: '🔊 Status de voz', value: voiceSummary(v.voice), inline: true },
       spacer,
-      { name: '🔗 Links do X', value: linksSummary(v.links), inline: true },
+      { name: '🔗 Links', value: linksSummary(v.links), inline: true },
       { name: '🤖 Status do bot', value: v.presence.enabled ? '🟢 Ligado\nEm todos os servidores' : '⚪ Desligado', inline: true },
       spacer,
     );
@@ -223,10 +240,10 @@ export function renderPanel(page, v) {
 /** Painel pessoal do /links. `v`: { user, choice, guild?: {name, links, applies} }. */
 export function renderUserLinks(v) {
   const on = v.choice === true;
-  const embed = new EmbedBuilder().setColor(on ? BRAND : OFF).setTitle('🔗 Seus links do X/Twitter')
+  const embed = new EmbedBuilder().setColor(on ? BRAND : OFF).setTitle('🔗 Seus links (X, TikTok, Instagram)')
     .setThumbnail(v.avatar || null)
     .setDescription([v.notice,
-      'O bot pode trocar os links do X que **você** manda por fxtwitter, para o Discord mostrar a prévia certa. '
+      'O bot pode trocar os links do X, TikTok e Instagram que **você** manda (por fxtwitter, tnktok e uuinstagram), para o Discord mostrar a prévia certa. '
       + 'Vale em todos os servidores com o bot que permitem a correção.'].filter(Boolean).join('\n\n'))
     .addFields({
       name: 'Sua escolha',

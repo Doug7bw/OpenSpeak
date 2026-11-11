@@ -3,7 +3,7 @@
 // no status do próprio bot. Cada aviso liga/desliga na config; quem transmite
 // escolhe por stream ("Mostrar ao vivo no bot do Discord", configurações avançadas).
 //
-// Também corrige links do X/Twitter (desligado por padrão, liga por servidor com
+// Também corrige links do X/Twitter, TikTok e Instagram (desligado por padrão, liga por servidor com
 // /painel links): troca por fxtwitter.com para o Discord mostrar a prévia certa.
 //
 // Uso: DISCORD_TOKEN=... node src/bot.js   (config em ./config.json ou OPENSPEAK_BOT_CONFIG)
@@ -30,7 +30,7 @@ import {
   renderAnswer, renderBuild, renderBuildId, renderCode, renderCounterItems, renderCounters, renderHero, renderInfo, renderItem,
   renderNotes, renderRanking, selectedBuild, withoutAnnotations,
 } from './dlview.js';
-import { chooseLinkAction, linkSettings, linksApplyTo, rewriteXLinks, webhookName } from './xlinks.js';
+import { LINK_NETWORKS, chooseLinkAction, linkSettings, linksApplyTo, rewriteLinks, webhookName } from './xlinks.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CONFIG_FILE = path.resolve(process.env.OPENSPEAK_BOT_CONFIG ?? path.join(ROOT, 'config.json'));
@@ -103,7 +103,7 @@ function explain(err) {
 /** /painel: abre o painel de configuração deste servidor (tudo por botões e menus). */
 const ADMIN_COMMAND = new SlashCommandBuilder()
   .setName('painel')
-  .setDescription('Painel do Frisquila: avisos de transmissão, status de voz e links do X')
+  .setDescription('Painel do Frisquila: avisos de transmissão, status de voz e links (X, TikTok, Instagram)')
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
   .setContexts(InteractionContextType.Guild)
   .addStringOption(opt => opt
@@ -141,7 +141,7 @@ const COMMANDS = [
     .setContexts(...PUBLIC_CONTEXTS),
   new SlashCommandBuilder().setName('servidor').setDescription('Usuários online, transmissões e tráfego do servidor OpenSpeak')
     .setContexts(...PUBLIC_CONTEXTS),
-  new SlashCommandBuilder().setName('links').setDescription('Ativar ou desativar a correção dos seus links do X/Twitter (fxtwitter)')
+  new SlashCommandBuilder().setName('links').setDescription('Ativar ou desativar a correção dos seus links do X, TikTok e Instagram')
     .setContexts(...PUBLIC_CONTEXTS),
   ...deadlockCommands(),
 ];
@@ -530,10 +530,20 @@ class LiveBot {
     this.client.user.setPresence({ status: live ? 'online' : 'idle', activities: text ? [activity] : [] });
   }
 
-  // ---------------------------------------------- links do X/Twitter
+  // ------------------------------------ links (X/Twitter, TikTok, Instagram)
 
   links(guildId) {
     return linkSettings(this.state.guilds[guildId]?.links);
+  }
+
+  /** Respostas de Deadlock neste servidor: só para quem pediu (ephemeral) ou públicas (padrão). */
+  deadlockEphemeral(guildId) {
+    return this.state.guilds[guildId]?.deadlock?.ephemeral === true;
+  }
+
+  /** Opções do reply/deferReply das telas de Deadlock, conforme a config do servidor. */
+  deadlockReply(interaction) {
+    return interaction.guildId && this.deadlockEphemeral(interaction.guildId) ? { flags: MessageFlags.Ephemeral } : {};
   }
 
   /** Links a corrigir nesta mensagem (servidor ligado e a pessoa no alcance), ou null. */
@@ -543,7 +553,7 @@ class LiveBot {
     if (message.type !== MessageType.Default && message.type !== MessageType.Reply) return null;
     const settings = this.links(message.guildId);
     if (!linksApplyTo(settings, this.state.users[message.author.id]?.links)) return null;
-    const { content, links } = rewriteXLinks(message.content, settings.service);
+    const { content, links } = rewriteLinks(message.content, settings);
     return links.length ? { settings, content, links } : null;
   }
 
@@ -598,7 +608,7 @@ class LiveBot {
     }
   }
 
-  /** Mensagem nova em algum servidor: corrige os links do X se o servidor ligou. */
+  /** Mensagem nova em algum servidor: corrige os links (X, TikTok, Instagram) se o servidor ligou. */
   async onMessage(message) {
     const fix = this.linkFix(message);
     if (!fix) return;
@@ -669,7 +679,7 @@ class LiveBot {
   async onMessageUpdate(message, before = null) {
     // Sem o texto anterior (mensagem fora do cache, ex.: depois de reiniciar) não dá
     // para saber se o bot já respondeu: não cria resposta nova, só atualiza as lembradas.
-    const hadLinks = !before || before.partial || rewriteXLinks(before.content).links.length > 0;
+    const hadLinks = !before || before.partial || rewriteLinks(before.content).links.length > 0;
     if (message.partial) {
       try {
         message = await message.fetch();
@@ -708,7 +718,7 @@ class LiveBot {
     if (!pending) {
       pending = (async () => {
         const existing = (await channel.fetchWebhooks()).find(w => w.owner?.id === this.client.user.id && w.token);
-        return existing ?? channel.createWebhook({ name: 'Frisquila links', reason: 'Correção de links do X/Twitter' });
+        return existing ?? channel.createWebhook({ name: 'Frisquila links', reason: 'Correção de links (X, TikTok, Instagram)' });
       })();
       pending.catch(() => this.webhooks.delete(channel.id)); // tenta de novo na próxima
       this.webhooks.set(channel.id, pending);
@@ -849,6 +859,7 @@ class LiveBot {
       chat: { enabled: n.chat.enabled, channelId: valid(n.chat.channelId), mention: n.chat.mention },
       voice: { enabled: n.voiceStatus.enabled, channelId: valid(n.voiceStatus.channelId) },
       links: this.links(guild.id),
+      deadlock: { ephemeral: this.deadlockEphemeral(guild.id) },
       presence: { enabled: this.config.presence.enabled, canChange: this.canChangePresence(interaction), text: this.lastPresence },
       live: this.streams.length,
       stats: statsVars(this.stats),
@@ -896,8 +907,13 @@ class LiveBot {
         } else if (arg === 'links') {
           const enabled = !this.links(guildId).enabled;
           this.saveLinks(guildId, { enabled });
-          log(`painel: links do X ${enabled ? 'ligado' : 'desligado'} em ${who}`);
-          notice = `${enabled ? '✅' : '⭕'} Correção de links do X ${enabled ? 'ligada' : 'desligada'}.`;
+          log(`painel: links ${enabled ? 'ligado' : 'desligado'} em ${who}`);
+          notice = `${enabled ? '✅' : '⭕'} Correção de links ${enabled ? 'ligada' : 'desligada'}.`;
+        } else if (arg === 'dl') {
+          const ephemeral = !this.deadlockEphemeral(guildId);
+          this.saveGuild(guildId, 'deadlock', { ephemeral });
+          log(`painel: respostas de Deadlock ${ephemeral ? 'só para quem pediu' : 'públicas'} em ${who}`);
+          notice = ephemeral ? '✅ As respostas de Deadlock agora aparecem só para quem pediu.' : '✅ As respostas de Deadlock agora são públicas.';
         } else if (arg === 'status') {
           if (!this.canChangePresence(interaction)) { notice = '🔒 Só o dono do bot liga ou desliga o status do bot.'; break; }
           const enabled = !this.config.presence.enabled;
@@ -958,11 +974,20 @@ class LiveBot {
       }
       case 'linkmode':
       case 'linkscope':
+      case 'linknets': { // quais redes corrigir (menu de várias opções)
+        page = 'links';
+        const networks = Object.fromEntries(Object.keys(LINK_NETWORKS).map(n => [n, interaction.values.includes(n)]));
+        this.saveLinks(guildId, { networks });
+        log(`painel: links redes=${interaction.values.join(',') || 'nenhuma'} em ${who}`);
+        notice = interaction.values.length ? '✅ Salvo.' : '⚠️ Nenhuma rede escolhida: nenhum link será corrigido.';
+        break;
+      }
       case 'linkservice': {
         page = 'links';
         const key = { linkmode: 'mode', linkscope: 'scope', linkservice: 'service' }[action];
-        this.saveLinks(guildId, { [key]: value });
-        log(`painel: links do X ${key}=${value} em ${who}`);
+        const chosen = value ?? arg; // serviço do X vem de botão (os:linkservice:<serviço>:links)
+        this.saveLinks(guildId, { [key]: chosen });
+        log(`painel: links ${key}=${chosen} em ${who}`);
         notice = '✅ Salvo.';
         break;
       }
@@ -993,7 +1018,7 @@ class LiveBot {
     this.state.users[interaction.user.id] = { ...this.state.users[interaction.user.id], links: enabled };
     saveState(this.state);
     log(`/links: ${interaction.user.tag} ${enabled ? 'ativou' : 'desativou'}`);
-    const notice = enabled ? '✅ Ativado: seus links do X vão ser corrigidos.' : '⭕ Desativado: seus links do X ficam como estão.';
+    const notice = enabled ? '✅ Ativado: seus links (X, TikTok, Instagram) vão ser corrigidos.' : '⭕ Desativado: seus links ficam como estão.';
     await interaction.update(renderUserLinks(this.userLinksView(interaction, notice)));
   }
 
@@ -1039,7 +1064,7 @@ class LiveBot {
   }
 
   async onDeadlockCommand(interaction) {
-    await interaction.deferReply();
+    await interaction.deferReply(this.deadlockReply(interaction));
     const kind = interaction.commandName;
     const rank = interaction.options.getString('rank') ?? 'todos';
     try {
@@ -1072,7 +1097,7 @@ class LiveBot {
         return;
       }
       if (['build', 'counter', 'info', 'citems'].includes(action)) { // botões entre as telas: nova mensagem
-        await interaction.deferReply();
+        await interaction.deferReply(this.deadlockReply(interaction));
         const hero = await this.dl.findHero(a);
         await interaction.editReply(await this.deadlockView(action === 'citems' ? 'itens_contra' : action, { hero, rank: b ?? 'todos' }));
         return;
@@ -1159,7 +1184,7 @@ let bot;
 /**
  * GuildVoiceStates (não é privilegiada): saber quais calls têm gente.
  * GuildMessages + MessageContent (privilegiada, ativar no Developer Portal): ler
- * as mensagens para corrigir links do X. Sem ela no portal, o login falha com
+ * as mensagens para corrigir links (X, TikTok, Instagram). Sem ela no portal, o login falha com
  * "disallowed intents" e o bot conecta de novo sem ler mensagens (os avisos seguem).
  */
 function createClient(readMessages) {
@@ -1241,7 +1266,7 @@ async function onReady(client, readMessages) {
   setInterval(() => bot.rotatePresence(), c.presence.rotateSeconds * 1000);
   const linkGuilds = Object.values(bot.state.guilds).filter(g => g?.links?.enabled).length;
   if (!readMessages && linkGuilds)
-    log(`links do X: ligado em ${linkGuilds} servidor(es), mas sem o Message Content Intent não funciona`);
+    log(`links: ligado em ${linkGuilds} servidor(es), mas sem o Message Content Intent não funciona`);
 }
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
@@ -1257,7 +1282,7 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
 async function withoutMessages(failed) {
   if (client !== failed) return; // já trocado
   client = null;
-  log('Message Content Intent desligado no Developer Portal: conectando sem ler mensagens (links do X não funcionam)');
+  log('Message Content Intent desligado no Developer Portal: conectando sem ler mensagens (correção de links não funciona)');
   await failed.destroy();
   return login(false);
 }
