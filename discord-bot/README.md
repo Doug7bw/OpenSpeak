@@ -113,6 +113,11 @@ No modo substituir:
   perderia a referência), tem **anexo**, figurinha ou enquete, ficaria com mais
   de 2000 caracteres, ou falta **Gerenciar webhooks** / **Gerenciar mensagens**.
 
+Cada mensagem recebe **no máximo uma** correção, mesmo com evento repetido do
+Discord ou edição chegando enquanto a resposta ainda sai, e a prévia que o bot tirou
+fica tirada mesmo quando o Discord a gera depois: o bot vigia a mensagem por 5 min
+e confere de novo em 3 s e 10 s (`src/linkguard.js`).
+
 No modo responder, a resposta acompanha a original: se o autor **apaga** a
 mensagem, a resposta some junto; se **edita**, ela passa a ter os links novos
 (ou some, se ele tirou os links); e um link do X **adicionado numa edição** é

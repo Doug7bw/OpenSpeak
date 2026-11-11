@@ -21,6 +21,7 @@ import {
   mediaText, presenceText, serverText, statsVars, streamKey, voiceStatusText, watchersText,
 } from './live.js';
 import { startWebhook } from './webhook.js';
+import { LinkGuard, SUPPRESS_RECHECK_MS } from './linkguard.js';
 import { PAGES, openButtonRow, renderPanel, renderUserLinks } from './panel.js';
 import { HELP_TEXT, counterCandidates, counterReasonGateway, isBeginnerQuestion, answerGateway, answerMessages, askGateway, findHeroInText, findItemInText, gatewayMessages, officialContext, parseQuestion } from './ask.js';
 import { buildCode } from './buildcode.js';
@@ -45,6 +46,7 @@ const ASK_COOLDOWN_MS = 4000;
 const COUNTER_WHY_TTL_MS = 30 * 60_000;
 /** Respostas de links lembradas para refletir edição/exclusão da original (as mais recentes). */
 const LINK_REPLIES_MAX = 2000;
+
 
 const log = (...args) => console.log(new Date().toISOString(), ...args);
 
@@ -203,7 +205,8 @@ class LiveBot {
     // Modo responder: original -> resposta do bot, para refletir edição e exclusão (só em memória).
     this.linkReplies = new Map();
     this.deletedOriginals = new Set();
-    this.handledEdits = new Set();
+    // Uma resposta por mensagem e prévia tirada mesmo quando chega depois (src/linkguard.js).
+    this.linkGuard = new LinkGuard();
     this.dl = new DeadlockData({ log }); // dados de Deadlock (deadlock-api.com), com cache
     // ia-gateway (rodízio de IA compartilhado): só para perguntas livres que o bot não entende sozinho.
     const gw = baseConfig.iaGateway ?? {};
@@ -645,6 +648,7 @@ class LiveBot {
   async onMessage(message) {
     const fix = this.linkFix(message);
     if (!fix) return;
+    if (!this.linkGuard.claim(message.id)) return; // já tratada: nunca responde duas vezes
     const { settings, content, links } = fix;
 
     const channel = message.channel;
@@ -674,6 +678,9 @@ class LiveBot {
       log(`links: sem "Gerenciar mensagens" em #${message.channel?.name ?? message.channelId} de "${message.guild?.name}": a prévia quebrada fica`);
     }
     if (canSuppress) {
+      // Marca antes de qualquer espera: a prévia do Discord pode chegar a qualquer momento.
+      this.linkGuard.watchPreview(message.id);
+      for (const ms of SUPPRESS_RECHECK_MS) setTimeout(() => this.suppressIfShown(message).catch(() => {}), ms).unref?.();
       try {
         await message.suppressEmbeds(true);
       } catch (err) {
@@ -688,15 +695,32 @@ class LiveBot {
       });
       // O autor apagou enquanto o bot respondia: some com a resposta também.
       if (this.deletedOriginals.has(message.id)) return void reply.delete().catch(() => {});
-      this.linkReplies.set(message.id, { reply, content: message.content, suppress: canSuppress });
+      this.linkReplies.set(message.id, { reply, content: message.content });
       while (this.linkReplies.size > LINK_REPLIES_MAX) this.linkReplies.delete(this.linkReplies.keys().next().value);
     } catch (err) {
       log('links: falha ao responder:', explain(err));
     }
   }
 
+  /**
+   * A prévia do Discord costuma chegar depois de o bot tirá-la (como "edição" da mensagem,
+   * às vezes antes de a resposta terminar de sair): se a mensagem está marcada e a prévia
+   * apareceu, tira de novo. Chamado nas edições e em 3 s / 10 s depois da resposta.
+   */
+  async suppressIfShown(message) {
+    const state = { embeds: message.embeds?.length ?? 0, suppressed: !!message.flags?.has(MessageFlags.SuppressEmbeds) };
+    if (!this.linkGuard.needsSuppress(message.id, state)) return;
+    try {
+      await message.suppressEmbeds(true);
+    } catch (err) {
+      if (err?.code === 10008) this.linkGuard.stopWatching(message.id); // apagada
+      else log('links: falha ao tirar a prévia:', explain(err));
+    }
+  }
+
   /** A mensagem original foi apagada: apaga a resposta do bot junto. */
   async onMessageDelete(messageId) {
+    this.linkGuard.stopWatching(messageId);
     this.deletedOriginals.add(messageId);
     if (this.deletedOriginals.size > LINK_REPLIES_MAX) this.deletedOriginals.delete(this.deletedOriginals.values().next().value);
     const tracked = this.linkReplies.get(messageId);
@@ -724,20 +748,12 @@ class LiveBot {
         return; // apagada ou sem acesso
       }
     }
+    await this.suppressIfShown(message);
     const tracked = this.linkReplies.get(message.id);
     if (!tracked) {
-      if (!hadLinks && !this.handledEdits.has(message.id) && this.linkFix(message)) {
-        this.handledEdits.add(message.id); // um link novo por edição: corrige uma vez
-        if (this.handledEdits.size > LINK_REPLIES_MAX) this.handledEdits.delete(this.handledEdits.values().next().value);
-        await this.onMessage(message);
-      }
+      // Link novo numa edição: corrige (o onMessage trava, então é uma vez só).
+      if (!hadLinks && !this.linkGuard.isHandled(message.id) && this.linkFix(message)) await this.onMessage(message);
       return;
-    }
-    // A prévia do Discord costuma chegar depois de o bot tirá-la (vem como "edição"): tira de novo.
-    if (tracked.suppress && message.embeds.length && !message.flags.has(MessageFlags.SuppressEmbeds)) {
-      await message.suppressEmbeds(true).catch(err => {
-        if (err?.code !== 10008) log('links: falha ao tirar a prévia:', explain(err));
-      });
     }
     if (tracked.content === message.content) return;
     tracked.content = message.content;
@@ -745,6 +761,7 @@ class LiveBot {
     try {
       if (!fix) {
         this.linkReplies.delete(message.id);
+        this.linkGuard.release(message.id); // tirou os links: se puser de novo, corrige de novo (uma vez)
         await tracked.reply.delete();
       } else if (tracked.reply.content !== fix.links.join('\n')) {
         tracked.reply = await tracked.reply.edit({ content: fix.links.join('\n'), allowedMentions: { parse: [], repliedUser: false } });
