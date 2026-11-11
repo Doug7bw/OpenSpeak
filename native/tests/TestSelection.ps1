@@ -60,7 +60,7 @@ $script:UiShell = @((& $qml @('Main', 'MainView')), '^native/client/main\.cpp$')
 # Peças visuais usadas em toda parte: uma amostra dos painéis basta para ver que o app abre.
 $script:UiSampled = @('startup', 'login', 'setup', 'preferences')
 $script:UiSampledInputs = @((& $qml @('Theme', 'Icon', 'I18n', 'Toasts', 'ResizeHandles')),
-    '^native/client/(AppIcon|TrayIcon|NativeWindow|SoundEffects)\.', '^native/client/assets/', $engine)
+    '^native/client/(AppIcon|TrayIcon|NativeWindow|NvidiaProfile|SoundEffects)\.', '^native/client/assets/', $engine)
 
 foreach ($panel in @($script:PanelInputs.Keys)) {
     $inputs = @($script:PanelInputs[$panel]) + $script:UiShell

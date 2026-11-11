@@ -15,6 +15,7 @@
 #include "AutoUpdater.h"
 #include "TrayIcon.h"
 #include "NativeWindow.h"
+#include "NvidiaProfile.h"
 #include "SoundEffects.h"
 #include "Version.h"
 
@@ -85,10 +86,17 @@ int main(int argc, char *argv[])
     QCommandLineOption restartOpt(QStringLiteral("restart-after-update"), QStringLiteral("Reabre o app após atualização solicitada."));
     QCommandLineOption afterUpdateOpt(QStringLiteral("after-update"), QStringLiteral("Aberto pelo instalador ao fim da atualização."));
     QCommandLineOption autostartOpt(QStringLiteral("autostart"), QStringLiteral("Aberto pelo Windows ao entrar na conta."));
-    parser.addOptions({profileOpt, debugOpt, serverOpt, nickOpt, autoOpt, shotOpt, autoStreamOpt, autoJoinOpt, openOpt, meshPortOpt, uiSmokeOpt, cloudOpt, quitOpt, updateOpt, digestOpt, waitPidOpt, restartOpt, afterUpdateOpt, autostartOpt});
+    QCommandLineOption gsyncOpt(QStringLiteral("gsync-off"), QStringLiteral("Só desliga o G-Sync no perfil NVIDIA do app e encerra (0 = desligado, 3 = já estava, 2 = sem NVIDIA, 1 = erro)."));
+    parser.addOptions({gsyncOpt, profileOpt, debugOpt, serverOpt, nickOpt, autoOpt, shotOpt, autoStreamOpt, autoJoinOpt, openOpt, meshPortOpt, uiSmokeOpt, cloudOpt, quitOpt, updateOpt, digestOpt, waitPidOpt, restartOpt, afterUpdateOpt, autostartOpt});
     parser.process(app);
     if (parser.isSet(updateOpt))
         return AutoUpdater::runInstallHelper(parser.value(updateOpt), parser.value(digestOpt), parser.value(waitPidOpt).toUInt(), parser.isSet(restartOpt));
+    if (parser.isSet(gsyncOpt)) {
+        const GsyncResult r = disableGsyncForThisApp();
+        // 0 = desligado agora, 3 = já estava, 2 = sem NVIDIA, 1 = falhou.
+        return r.status == GsyncResult::Failed ? 1 : r.status == GsyncResult::NoNvidia ? 2
+             : r.status == GsyncResult::AlreadyOff ? 3 : 0;
+    }
 #ifdef Q_OS_WIN
     // O instalador segura este mutex (SetupMutex) enquanto roda. Aberto no meio da
     // atualização, o app não usaria arquivos pela metade nem dispararia outra instalação.
@@ -121,6 +129,9 @@ int main(int argc, char *argv[])
         }
     }
 
+    // Com G-Sync em janela, o driver NVIDIA faz o monitor seguir os quadros da UI e a tela pisca.
+    if (!parser.isSet(uiSmokeOpt))
+        disableGsyncInBackground();
     Settings settings(parser.value(profileOpt), parser.isSet(debugOpt));
     settings.refreshLaunchAtStartup();
     // A janela pode ficar escondida na bandeja; quem encerra é o "Sair" (Main.qml).

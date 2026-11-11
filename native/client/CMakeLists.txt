@@ -39,7 +39,7 @@ target_precompile_headers(openspeak_engine PRIVATE ${OPENSPEAK_PCH})
 # ---------------------------------------------------------------- app
 find_package(Qt6 REQUIRED COMPONENTS MultimediaPrivate)
 find_package(Qt6 REQUIRED COMPONENTS Widgets Network GuiPrivate)
-qt_add_executable(OpenSpeak WIN32 main.cpp WindowThumbnail.cpp WindowThumbnail.h TrayIcon.cpp TrayIcon.h AppIcon.cpp AppIcon.h NativeWindow.cpp NativeWindow.h SoundEffects.cpp SoundEffects.h assets/OpenSpeak.rc)
+qt_add_executable(OpenSpeak WIN32 main.cpp WindowThumbnail.cpp WindowThumbnail.h TrayIcon.cpp TrayIcon.h AppIcon.cpp AppIcon.h NativeWindow.cpp NativeWindow.h NvidiaProfile.cpp NvidiaProfile.h SoundEffects.cpp SoundEffects.h assets/OpenSpeak.rc)
 qt_add_resources(OpenSpeak app_icon PREFIX "/" FILES assets/openspeak.ico)
 # O compilador de recursos não declara o .ico como dependência: sem isto, trocar o
 # ícone não refaz o .res e o .exe (menu Iniciar, atalhos) continua com o antigo.
