@@ -144,6 +144,10 @@ const COMMANDS = [
   new SlashCommandBuilder().setName('links').setDescription('Ativar ou desativar a correção dos seus links do X, TikTok e Instagram')
     .setContexts(...PUBLIC_CONTEXTS),
   ...deadlockCommands(),
+  new SlashCommandBuilder().setName('frisquila').setDescription('Deadlock: pergunte qualquer coisa (igual a @Frisquila)')
+    .setContexts(...PUBLIC_CONTEXTS)
+    .addStringOption(opt => opt.setName('pergunta').setDescription('Ex.: melhor build pra seven, quem countera o billy?')
+      .setRequired(true).setMaxLength(300)),
 ];
 const COMMAND_NAMES = new Set(COMMANDS.map(c => c.name));
 /** Comandos antigos que o bot apaga ao iniciar (o painel se chamava "openspeak"). */
@@ -569,11 +573,36 @@ class LiveBot {
     const text = message.content.replace(/<@!?\d+>/g, ' ').trim();
     const reply = payload => message.reply({ ...payload, allowedMentions: { parse: [], repliedUser: false } });
     if (!text) return void await reply({ content: HELP_TEXT });
-    const last = this.lastAsk.get(message.author.id) ?? 0;
-    if (Date.now() - last < ASK_COOLDOWN_MS) return;
-    this.lastAsk.set(message.author.id, Date.now());
-    if (this.lastAsk.size > 500) this.lastAsk.delete(this.lastAsk.keys().next().value);
+    if (!this.takeAskTurn(message.author.id)) return;
     message.channel.sendTyping?.().catch(() => {});
+    await reply(await this.answerQuestion(text, message.author.tag));
+  }
+
+  /** Uma pergunta por pessoa a cada ASK_COOLDOWN_MS (vale para o @Frisquila e o /frisquila). */
+  takeAskTurn(userId) {
+    const last = this.lastAsk.get(userId) ?? 0;
+    if (Date.now() - last < ASK_COOLDOWN_MS) return false;
+    this.lastAsk.set(userId, Date.now());
+    if (this.lastAsk.size > 500) this.lastAsk.delete(this.lastAsk.keys().next().value);
+    return true;
+  }
+
+  /**
+   * /frisquila pergunta:…: a mesma pergunta livre do @Frisquila, mas como comando, então
+   * pode ser só para quem perguntou (painel > Deadlock > "Só para quem pediu").
+   */
+  async onAskCommand(interaction) {
+    const text = interaction.options.getString('pergunta', true).trim();
+    if (!this.takeAskTurn(interaction.user.id))
+      return void await interaction.reply({ content: 'Calma: uma pergunta a cada poucos segundos.', flags: MessageFlags.Ephemeral });
+    await interaction.deferReply(this.deadlockReply(interaction));
+    const payload = await this.answerQuestion(text, interaction.user.tag);
+    await interaction.editReply({ ...payload, allowedMentions: { parse: [] } });
+  }
+
+  /** Resposta (mensagem pronta) para uma pergunta livre de Deadlock. */
+  async answerQuestion(text, who) {
+    if (!text) return { content: HELP_TEXT };
     try {
       const [heroes, itemMap] = await Promise.all([this.dl.heroes(), this.dl.items()]);
       const items = [...itemMap.values()];
@@ -595,16 +624,16 @@ class LiveBot {
           log('pergunta livre: ia-gateway:', err.message);
         }
       }
-      if (!q) return void await reply({ content: HELP_TEXT });
-      log(`pergunta livre: ${q.kind} ${q.hero?.name ?? q.item?.name ?? ''} (${q.rank}) por ${message.author.tag}`);
+      if (!q) return { content: HELP_TEXT };
+      log(`pergunta livre: ${q.kind} ${q.hero?.name ?? q.item?.name ?? ''} (${q.rank}) por ${who}`);
       if (q.kind === 'pergunta') {
         const answer = await answerGateway(this.gateway, answerMessages(text, officialContext(text, heroes, items)));
-        return void await reply(renderAnswer({ question: text, answer }));
+        return renderAnswer({ question: text, answer });
       }
-      await reply(await this.deadlockView(q.kind, q));
+      return await this.deadlockView(q.kind, q);
     } catch (err) {
       log('pergunta livre:', explain(err));
-      await reply({ content: 'Não consegui buscar isso agora. Tenta de novo em alguns instantes.' }).catch(() => {});
+      return { content: 'Não consegui buscar isso agora. Tenta de novo em alguns instantes.' };
     }
   }
 
@@ -1128,6 +1157,7 @@ class LiveBot {
 
   async onCommand(interaction) {
     if (DEADLOCK_COMMANDS.has(interaction.commandName)) return this.onDeadlockCommand(interaction);
+    if (interaction.commandName === 'frisquila') return this.onAskCommand(interaction);
     if (interaction.commandName === 'aovivo') return this.onLiveCommand(interaction);
     if (interaction.commandName === 'servidor') return this.onServerCommand(interaction);
     if (interaction.commandName === 'links') return this.onUserLinksCommand(interaction);

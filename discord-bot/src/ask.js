@@ -245,4 +245,4 @@ export const HELP_TEXT = 'Pode me perguntar qualquer coisa de **Deadlock**. Por 
   + '• `@Frisquila melhor build pra seven`\n• `@Frisquila quem countera o billy?`\n• `@Frisquila itens pra counterar o haze`\n'
   + '• `@Frisquila que herói é o vindicta?`\n• `@Frisquila melhores heróis agora`\n• `@Frisquila o que faz o toxic bullets?`\n'
   + '• `@Frisquila qual a lore do cultista?`\n'
-  + 'Ou use `/build`, `/counter`, `/heroi`, `/ranking` e `/item`.';
+  + 'Ou use `/frisquila pergunta:…`, `/build`, `/counter`, `/heroi`, `/ranking` e `/item`.';

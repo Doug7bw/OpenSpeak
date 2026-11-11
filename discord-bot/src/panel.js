@@ -191,7 +191,7 @@ export function renderPanel(page, v) {
   if (page === 'deadlock') {
     const ephemeral = v.deadlock?.ephemeral === true;
     const embed = baseEmbed(v, '🎮 Deadlock')
-      .setDescription(describe(v, 'Como aparecem as respostas de `/build`, `/counter`, `/heroi`, `/item` e `/ranking` (e dos botões delas) neste servidor: '
+      .setDescription(describe(v, 'Como aparecem as respostas de `/build`, `/counter`, `/heroi`, `/item`, `/ranking` e `/frisquila` (e dos botões delas) neste servidor: '
         + '**públicas**, para todo mundo do canal ver, ou **só para quem pediu** (mensagem que só a pessoa vê).'))
       .addFields({ name: 'Respostas', value: ephemeral ? '🙈 **Só para quem pediu**' : '👥 **Públicas**', inline: true });
     return { embeds: [embed], components: [nav, row(toggleButton('dl', ephemeral, { label: 'Só para quem pediu', page }))] };
