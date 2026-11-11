@@ -387,7 +387,10 @@ void ScreenshareManager::startAudioFor(OwnStream &own)
         qCInfo(lcShare) << "áudio da janela: processo" << pid;
         if (pid) {
             own.audioLabel = QStringLiteral("Somente a janela");
-            own.audio->start(AudioCapture::Mode::Process, pid);
+            std::function<quint32()> follow;
+            if (hwnd)
+                follow = [hwnd] { return AudioCapture::pidForWindow(hwnd); };
+            own.audio->start(AudioCapture::Mode::Process, pid, std::move(follow));
             break;
         }
         [[fallthrough]];

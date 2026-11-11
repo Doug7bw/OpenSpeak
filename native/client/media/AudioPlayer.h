@@ -1,9 +1,13 @@
 #pragma once
 // Reprodução do áudio de um stream assistido (float32 48 kHz estéreo).
-// Mantém a latência baixa descartando o excesso acumulado no buffer.
+// Mantém a latência baixa descartando o excesso acumulado no buffer, e segue a saída
+// padrão do Windows: trocou o dispositivo (fone, caixa, Bluetooth) ou a saída parou
+// com erro, o player é recriado em vez de ficar mudo.
 
+#include <QAudioDevice>
 #include <QAudioSink>
 #include <QIODevice>
+#include <QMediaDevices>
 #include <QObject>
 
 #include <memory>
@@ -24,10 +28,16 @@ public:
     double volume() const { return m_volume; }
 
 private:
+    void open();
+    void close();
+
+    QMediaDevices m_devices;
+    QAudioDevice m_output;
     std::unique_ptr<QAudioSink> m_sink;
     QIODevice *m_device = nullptr;
     double m_volume = 1.0;
     qsizetype m_maxBuffered = 0;
+    int m_stuckWrites = 0;
 };
 
 } // namespace openspeak

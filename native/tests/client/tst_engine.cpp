@@ -13,6 +13,7 @@
 #include "SourceThumbnails.h"
 
 #include <QImage>
+#include <algorithm>
 #include <QPainter>
 #include <QSignalSpy>
 #include <QFile>
@@ -432,6 +433,30 @@ private slots:
         for (const auto &p : packets)
             out += dec.decode(p);
         QCOMPARE(out.size(), 5 * 960 * 2 * 4);
+    }
+
+    // A captura não entrega nada no silêncio; o timestamp RTP tem que seguir o
+    // relógio (como num silêncio DTX) para o player do navegador não descartar o som.
+    void opusTimestampFollowsTheClockAcrossSilence()
+    {
+        QList<quint32> stamps;
+        OpusEncoder enc;
+        QVERIFY(enc.open(128000, [&](const QByteArray &, quint32 ts) { stamps.append(ts); }));
+        const QByteArray pcm(960 * 2 * 4, 0); // 20 ms
+        for (int i = 0; i < 5; ++i)
+            enc.push(pcm, 48000, 2);
+        QTest::qSleep(600);
+        for (int i = 0; i < 5; ++i)
+            enc.push(pcm, 48000, 2);
+        QVERIFY(stamps.size() >= 8);
+        quint32 biggestStep = 0;
+        for (int i = 1; i < stamps.size(); ++i) {
+            const quint32 step = stamps[i] - stamps[i - 1]; // módulo 2^32, como no RTP
+            QVERIFY2(step > 0 && step < 0x80000000u, qPrintable(QString::number(stamps[i - 1]) + " -> " + QString::number(stamps[i])));
+            QCOMPARE(step % 960, 0u);
+            biggestStep = std::max(biggestStep, step);
+        }
+        QVERIFY2(biggestStep >= 48000 / 5, "o timestamp não pulou o silêncio de 600 ms");
     }
 };
 

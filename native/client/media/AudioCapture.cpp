@@ -135,7 +135,7 @@ quint32 AudioCapture::pidForWindow(quintptr id)
     return familyRoot(pid, processes);
 }
 
-bool AudioCapture::start(Mode mode, quint32 pid)
+bool AudioCapture::start(Mode mode, quint32 pid, std::function<quint32()> resolvePid)
 {
     stop();
     m_running = true;
@@ -164,7 +164,7 @@ bool AudioCapture::start(Mode mode, quint32 pid)
         });
         return true;
     }
-    m_thread = std::thread(&AudioCapture::loopbackThread, this, mode, pid);
+    m_thread = std::thread(&AudioCapture::loopbackThread, this, mode, pid, std::move(resolvePid));
     return true;
 }
 
@@ -211,7 +211,7 @@ quint32 AudioCapture::rootProcess(const QList<QPair<quint32, quint32>> &processe
     return root;
 }
 
-void AudioCapture::loopbackThread(Mode mode, quint32 pid)
+void AudioCapture::loopbackThread(Mode mode, quint32 pid, std::function<quint32()> resolvePid)
 {
     CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     auto fail = [this](const QString &what, HRESULT hr) {
@@ -227,13 +227,21 @@ void AudioCapture::loopbackThread(Mode mode, quint32 pid)
     fmt.nAvgBytesPerSec = fmt.nSamplesPerSec * fmt.nBlockAlign;
     HANDLE event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
 
-    // Quem sai da captura. No modo "sem Discord", reavaliado a cada segundo: se o
+    // Quem entra/sai da captura, reavaliado a cada segundo: se o
     // Discord abrir, fechar ou reiniciar (novo PID), a captura é recriada (~100 ms de corte).
+    // No modo janela, o processo também é reavaliado: um app da Store minimizado ou
+    // ainda abrindo pode ter apontado para o ApplicationFrameHost, que não toca nada.
     auto excludedTarget = [&]() -> DWORD {
         if (mode == Mode::SystemExcludingDiscord)
             if (const quint32 discord = discordRootPid())
                 return discord;
-        return mode == Mode::Process ? pid : GetCurrentProcessId();
+        if (mode == Mode::Process) {
+            if (resolvePid)
+                if (const quint32 resolved = resolvePid())
+                    pid = resolved;
+            return pid;
+        }
+        return GetCurrentProcessId();
     };
     QString lastExcluded;
     bool reported = false; // avisa a falha uma vez; segue tentando a cada segundo
@@ -290,20 +298,31 @@ void AudioCapture::loopbackThread(Mode mode, quint32 pid)
         }
         reported = false;
 
+        // A captura não avisa quando morre: com o dispositivo de saída trocado (fone
+        // Bluetooth, padrão do Windows, driver reiniciado), GetNextPacketSize passa a
+        // falhar ou o evento simplesmente para de disparar, e o stream ficava mudo até o
+        // fim. Erro => recria; sem nenhum pacote por StallMs => recria também (no
+        // silêncio não há nada a perder, e assim uma captura travada volta sozinha).
+        constexpr ULONGLONG StallMs = 3000;
         ULONGLONG nextCheck = GetTickCount64() + 1000;
+        ULONGLONG lastPacket = GetTickCount64();
         while (m_running) {
-            if (mode == Mode::SystemExcludingDiscord && GetTickCount64() >= nextCheck) {
-                nextCheck = GetTickCount64() + 1000;
+            const ULONGLONG now = GetTickCount64();
+            if (now >= nextCheck) {
+                nextCheck = now + 1000;
                 if (excludedTarget() != target)
                     break; // recria a captura com o novo alvo
             }
+            if (now - lastPacket > StallMs)
+                break;
             if (WaitForSingleObject(event, 100) != WAIT_OBJECT_0)
                 continue;
             UINT32 frames = 0;
-            while (SUCCEEDED(capture->GetNextPacketSize(&frames)) && frames > 0) {
+            HRESULT phr = S_OK;
+            while (SUCCEEDED(phr = capture->GetNextPacketSize(&frames)) && frames > 0) {
                 BYTE *data = nullptr;
                 DWORD flags = 0;
-                if (FAILED(capture->GetBuffer(&data, &frames, &flags, nullptr, nullptr)))
+                if (FAILED(phr = capture->GetBuffer(&data, &frames, &flags, nullptr, nullptr)))
                     break;
                 QByteArray pcm(int(frames * fmt.nBlockAlign), Qt::Uninitialized);
                 if (flags & AUDCLNT_BUFFERFLAGS_SILENT)
@@ -311,7 +330,13 @@ void AudioCapture::loopbackThread(Mode mode, quint32 pid)
                 else
                     memcpy(pcm.data(), data, pcm.size());
                 capture->ReleaseBuffer(frames);
+                lastPacket = GetTickCount64();
                 emit samplesAvailable(pcm, SampleRate, Channels);
+            }
+            if (FAILED(phr)) {
+                emit errorOccurred(QStringLiteral("captura de áudio interrompida, recriando (0x%1)")
+                                       .arg(quint32(phr), 8, 16, QLatin1Char('0')));
+                break;
             }
         }
         client->Stop();

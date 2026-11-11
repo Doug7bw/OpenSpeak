@@ -1,3 +1,17 @@
+# OpenSpeak 1.0.41 — áudio que não some mais
+
+- **Áudio da transmissão corrigido:** às vezes a transmissão ia sem som, ou o som
+  parava no meio. Quando o dispositivo de áudio mudava (fone Bluetooth, troca da
+  saída padrão, driver reiniciando), a captura morria e não voltava mais. Agora
+  ela se recria sozinha em poucos segundos.
+- Quem assistia pelo **navegador** podia ficar sem som depois de um momento de
+  silêncio na transmissão (tela de carregamento, pausa de música). Corrigido.
+- Na transmissão de **janela**, o app passa a seguir o processo da janela durante
+  toda a transmissão (por exemplo, app da Microsoft Store que estava minimizado
+  ao começar).
+- Para quem **assiste** no app: se você troca o fone ou a caixa de som, o áudio
+  passa para o novo dispositivo em vez de ficar mudo.
+
 # OpenSpeak 1.0.40 — sem G-Sync no OpenSpeak
 
 - Com o **G-Sync** ligado também em janela, as placas NVIDIA faziam o monitor
