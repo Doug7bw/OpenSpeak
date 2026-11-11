@@ -210,6 +210,7 @@ class LiveBot {
     this.gateway = (process.env.IA_GATEWAY_URL || gw.url) && (process.env.IA_GATEWAY_TOKEN || gw.token)
       ? { url: process.env.IA_GATEWAY_URL || gw.url, token: process.env.IA_GATEWAY_TOKEN || gw.token } : null;
     this.lastAsk = new Map(); // usuário -> quando perguntou
+    this.noSuppressWarned = new Set(); // canais onde já avisou no log que falta "Gerenciar mensagens"
     this.counterWhy = new Map(); // "heroi|rank" -> {at, reasons} do botão Por quê?
     this.messageIntent = true; // false se o Message Content Intent não está ativo no portal
   }
@@ -668,6 +669,10 @@ class LiveBot {
 
   /** Modo responder (e plano B do substituir): tira a prévia quebrada e responde, sem mencionar o autor. */
   async replyLinks(message, links, canSuppress) {
+    if (!canSuppress && !this.noSuppressWarned.has(message.channelId)) {
+      this.noSuppressWarned.add(message.channelId);
+      log(`links: sem "Gerenciar mensagens" em #${message.channel?.name ?? message.channelId} de "${message.guild?.name}": a prévia quebrada fica`);
+    }
     if (canSuppress) {
       try {
         await message.suppressEmbeds(true);
@@ -683,7 +688,7 @@ class LiveBot {
       });
       // O autor apagou enquanto o bot respondia: some com a resposta também.
       if (this.deletedOriginals.has(message.id)) return void reply.delete().catch(() => {});
-      this.linkReplies.set(message.id, { reply, content: message.content });
+      this.linkReplies.set(message.id, { reply, content: message.content, suppress: canSuppress });
       while (this.linkReplies.size > LINK_REPLIES_MAX) this.linkReplies.delete(this.linkReplies.keys().next().value);
     } catch (err) {
       log('links: falha ao responder:', explain(err));
@@ -727,6 +732,12 @@ class LiveBot {
         await this.onMessage(message);
       }
       return;
+    }
+    // A prévia do Discord costuma chegar depois de o bot tirá-la (vem como "edição"): tira de novo.
+    if (tracked.suppress && message.embeds.length && !message.flags.has(MessageFlags.SuppressEmbeds)) {
+      await message.suppressEmbeds(true).catch(err => {
+        if (err?.code !== 10008) log('links: falha ao tirar a prévia:', explain(err));
+      });
     }
     if (tracked.content === message.content) return;
     tracked.content = message.content;
@@ -1004,8 +1015,6 @@ class LiveBot {
         notice = channel ? `✅ Status de voz fixo em <#${channel.id}>.` : '✅ Status de voz nas calls com alguém conectado.';
         break;
       }
-      case 'linkmode':
-      case 'linkscope':
       case 'linknets': { // quais redes corrigir (menu de várias opções)
         page = 'links';
         const networks = Object.fromEntries(Object.keys(LINK_NETWORKS).map(n => [n, interaction.values.includes(n)]));
@@ -1014,6 +1023,8 @@ class LiveBot {
         notice = interaction.values.length ? '✅ Salvo.' : '⚠️ Nenhuma rede escolhida: nenhum link será corrigido.';
         break;
       }
+      case 'linkmode':
+      case 'linkscope':
       case 'linkservice': {
         page = 'links';
         const key = { linkmode: 'mode', linkscope: 'scope', linkservice: 'service' }[action];
