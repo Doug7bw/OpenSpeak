@@ -120,7 +120,7 @@ export const DEADLOCK_FACTS = [
   'O mapa tem tirolesas (zip lines) para se mover rápido pelas lanes.',
 ].join('\n');
 
-export const KINDS = ['build', 'counter', 'itens_contra', 'heroi', 'info', 'ranking', 'item', 'pergunta'];
+export const KINDS = ['build', 'counter', 'itens_contra', 'heroi', 'info', 'ranking', 'item', 'pergunta', 'openspeak', 'issue'];
 
 /** Mensagens para o ia-gateway classificar a pergunta (JSON). */
 export function gatewayMessages(text, heroes) {
@@ -128,7 +128,8 @@ export function gatewayMessages(text, heroes) {
   return [
     {
       role: 'system',
-      content: 'Você classifica perguntas de jogadores de Deadlock (jogo da Valve) para um bot do Discord. '
+      content: 'Você classifica mensagens para um bot do Discord que fala de Deadlock (jogo da Valve) e do OpenSpeak '
+        + '(app de transmissão de tela do servidor). '
         + 'Responda SÓ um JSON: {"tipo": "...", "heroi": "<nome em inglês ou null>", "item": "<nome do item ou null>", '
         + '"rank": "todos" | "baixo" | "medio" | "alto" | "topo"}. Tipos: '
         + 'build = itens/build/o que comprar para jogar DE um herói; '
@@ -138,8 +139,10 @@ export function gatewayMessages(text, heroes) {
         + 'info = quem é um herói, lore, habilidades, como ele funciona; '
         + 'ranking = melhores/piores heróis do momento, tier list, meta; '
         + 'item = o que faz um item; '
-        + 'pergunta = qualquer outra pergunta sobre Deadlock (lore geral, mapa, mecânicas, almas, patch…); '
-        + 'outro = não é sobre Deadlock. '
+        + 'pergunta = qualquer outra pergunta sobre Deadlock (lore geral, mapa, mecânicas, almas, patch, curiosidades de personagens…); '
+        + 'openspeak = dúvida sobre o OpenSpeak (como baixar, instalar, usar, recursos, versões); '
+        + 'issue = bug, reclamação, problema ou sugestão sobre o OpenSpeak para o desenvolvedor ver; '
+        + 'outro = não é sobre Deadlock nem OpenSpeak. '
         + 'rank: baixo = Initiate a Alchemist, medio = Arcanist a Emissary, alto = Archon e Oracle, topo = Phantom ou acima; '
         + `todos se não citar. Heróis: ${names}.`,
     },
@@ -194,10 +197,14 @@ export function answerMessages(text, context) {
         + '(jogo da Valve que mistura MOBA e tiro em terceira pessoa). Responda em português do Brasil, direto e '
         + 'descontraído, em até 150 palavras, com Markdown do Discord se ajudar. REGRA PRINCIPAL: afirme fatos específicos '
         + 'do jogo (lugares, personagens, história, mecânicas, números) SÓ se estiverem nos FATOS ou no CONTEXTO abaixo. '
-        + 'Se a pergunta pedir algo que não está neles, diga com sinceridade que não tem essa informação confiável e sugira '
-        + 'a wiki do jogo (deadlock.wiki); nunca invente. Opiniões gerais de estratégia podem, deixando claro que é dica. '
+        + 'Se for uma pergunta séria (mecânica, item, mapa, história) e a resposta não estiver neles, diga com sinceridade que não '
+        + 'tem essa informação confiável e sugira a wiki do jogo (deadlock.wiki); nunca invente. '
+        + 'Se for curiosidade ou brincadeira sobre a vida pessoal de um personagem que o jogo não conta (se é casado, namora, '
+        + 'signo, comida favorita, quem ganharia numa briga…), responda com uma piada curta e criativa, em tom de zoeira, sem '
+        + 'afirmar nada como fato: deixe claro que o jogo não diz e que é só especulação sua (pode usar o que o CONTEXTO conta '
+        + 'do personagem como base da piada). Opiniões gerais de estratégia podem, deixando claro que é dica. '
         + 'Números de desempenho (win rate, melhor build, counters) não: indique /build, /counter, /heroi, /ranking ou /item. '
-        + 'Se não for sobre Deadlock, diga em uma frase que você só fala de Deadlock.\n\nFATOS:\n' + DEADLOCK_FACTS,
+        + 'Se não for sobre Deadlock, diga em uma frase que você só fala de Deadlock e do OpenSpeak.\n\nFATOS:\n' + DEADLOCK_FACTS,
     },
     { role: 'user', content: context ? `CONTEXTO:\n${context}\n\nPERGUNTA: ${String(text).slice(0, 500)}` : String(text).slice(0, 500) },
   ];
@@ -241,10 +248,31 @@ export async function answerGateway(cfg, messages) {
   return texto;
 }
 
-export const HELP_TEXT = 'Pode me perguntar qualquer coisa de **Deadlock**. Por exemplo:\n'
+/**
+ * Resposta em JSON pela tarefa "frisquila_resposta", validada por `parse`; troca de provedor
+ * quando a resposta não valida (rascunho de issue, por exemplo).
+ */
+export async function jsonAnswerGateway(cfg, mensagens, parse) {
+  const excluir = [];
+  let rejeitado = null;
+  for (let i = 0; i < 3; i++) {
+    const data = await callGateway(cfg, { tarefa: 'frisquila_resposta', mensagens, json: true, temperatura: 0.2, max_tokens: 700, excluir, rejeitado, timeout_s: 20 }, 60_000);
+    try {
+      return parse(data.texto);
+    } catch (err) {
+      excluir.push(data.provedor);
+      rejeitado = { provedor: data.provedor, modelo: data.modelo, motivo: err.message };
+    }
+  }
+  throw new Error('ia-gateway: nenhuma resposta válida');
+}
+
+export const HELP_TEXT = 'Pode me perguntar qualquer coisa de **Deadlock** ou do **OpenSpeak**. Por exemplo:\n'
   + '• `@Frisquila melhor build pra seven`\n• `@Frisquila quem countera o billy?`\n• `@Frisquila itens pra counterar o haze`\n'
   + '• `@Frisquila que herói é o vindicta?`\n• `@Frisquila melhores heróis agora`\n• `@Frisquila o que faz o toxic bullets?`\n'
   + '• `@Frisquila qual a lore do cultista?`\n'
+  + '• `@Frisquila como baixo o openspeak?`\n'
+  + '• `@Frisquila bug: o áudio some quando…` ou `@Frisquila sugestão: …` (vira issue no GitHub para o desenvolvedor)\n'
   + 'Ou use `/frisquila pergunta:…`, `/build`, `/counter`, `/heroi`, `/ranking` e `/item`.';
 
 // ------------------------------------------------ "Por quê?" dos itens contra
