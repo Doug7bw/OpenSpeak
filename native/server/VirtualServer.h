@@ -72,6 +72,9 @@ public:
     void setProfilesFile(const QString &file) { m_profiles.setFile(file); }
     /// Relógio dos bloqueios por tentativas erradas (testes).
     void setProfileClock(std::function<qint64()> now) { m_profiles = ProfileStore(std::move(now)); }
+    /// Habilita CLIENT_LOGS: cada `clientlog` chega aqui (apelido, clid, versão do app, linhas).
+    using ClientLogFn = std::function<void(const QString &nickname, int clid, const QString &version, const QStringList &lines)>;
+    void setClientLogSink(ClientLogFn sink) { m_clientLog = std::move(sink); }
 
 private:
     struct Client {
@@ -131,6 +134,7 @@ private:
     QJsonObject cmdLogin(Client &, const QJsonObject &);
     QJsonObject cmdSync(Client &, const QJsonObject &);
     QJsonObject cmdHeartbeat(Client &, const QJsonObject &);
+    QJsonObject cmdClientLog(Client &, const QJsonObject &);
     QJsonObject cmdClientMove(Client &, const QJsonObject &);
     QJsonObject cmdClientUpdate(Client &, const QJsonObject &);
     QJsonObject cmdSetProfilePassword(Client &, const QJsonObject &);
@@ -173,6 +177,7 @@ private:
 
     SendFn m_send;
     std::function<void()> m_liveChanged;
+    ClientLogFn m_clientLog;
     StreamRelay *m_relay = nullptr;
     QString m_name;
     QString m_password;

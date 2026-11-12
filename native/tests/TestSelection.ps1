@@ -25,7 +25,7 @@ $qml = { param($names) '^native/client/qml/(' + ($names -join '|') + ')\.(qml|js
 
 # Entradas de cada teste, além do próprio arquivo tst_<nome>.cpp.
 $script:TestInputs = @{
-    tst_virtualserver   = @($protocol, '^native/server/(VirtualServer|ProfileStore|StreamRelay)\.')
+    tst_virtualserver   = @($protocol, '^native/server/(VirtualServer|ProfileStore|StreamRelay|LogStore)\.')
     tst_serverhost      = @($protocol, $commonRtc, $server)
     tst_rtprecovery     = @($commonRtc)
     tst_sfuforwarder    = @($commonRtc, '^native/server/Sfu')

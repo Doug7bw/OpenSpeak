@@ -343,6 +343,7 @@ const STRINGS = {
   'app.updates.changelog.all': 'Mostrar todas as versões',
   'app.updates.changelog.current': 'Mostrar só esta versão',
   'app.updates.options': 'Opções',
+  'app.diagnostics': 'Diagnóstico',
   'app.prefs.section.updates': 'Atualizações',
   'app.updated': 'OpenSpeak atualizado para a versão {version}',
   'video.sources.test': 'Teste',

@@ -71,7 +71,8 @@ endif()
 # Núcleo sem mídia (VirtualServer + interface StreamRelay): usado pelo tst_virtualserver.
 add_library(openspeak_server_core STATIC
     server/VirtualServer.cpp server/VirtualServer.h server/StreamRelay.h
-    server/ProfileStore.cpp server/ProfileStore.h)
+    server/ProfileStore.cpp server/ProfileStore.h
+    server/LogStore.cpp server/LogStore.h)
 target_link_libraries(openspeak_server_core PUBLIC openspeak_common Qt6::Core)
 target_include_directories(openspeak_server_core PUBLIC server)
 target_precompile_headers(openspeak_server_core PRIVATE ${OPENSPEAK_PCH})

@@ -38,6 +38,9 @@ export const CAPABILITIES = Object.freeze(['STREAM_P2P']);
 // Só com um ProfileStore (a sala web do Vercel não guarda perfis).
 export const CAP_PROFILES = 'PROFILES';
 export const CAP_PROFILE_MEDIA = 'PROFILE_MEDIA';
+// O servidor guarda os registros que o cliente manda com `clientlog` {version, lines}.
+export const CAP_CLIENT_LOGS = 'CLIENT_LOGS';
+export const CLIENT_LOG_MAX_LINES = 500;
 
 export const MAX_STREAMS_PER_CLIENT = 3;
 export const MAX_THUMBNAIL_BYTES = 256 * 1024;

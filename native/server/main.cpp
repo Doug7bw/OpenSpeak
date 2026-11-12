@@ -6,15 +6,20 @@
 //   OPENSPEAK_PASSWORD=<senha> exige a senha no login (servidor privado);
 //   OPENSPEAK_PASSWORD_FILE=<arquivo> lê a senha dele a cada login (o monitor troca a senha ali).
 //   OPENSPEAK_PROFILES_FILE=<arquivo> guarda os perfis (padrão: profiles.json na pasta de dados do usuário).
+//   OPENSPEAK_LOG_DIR=<pasta> guarda os registros do servidor e dos clientes (CLIENT_LOGS)
+//   (padrão: logs/ na pasta de dados do usuário; "off" desliga). Mantém 14 dias.
 //   OPENSPEAK_ICE='[{"urls":"stun:..."}]' define os iceServers anunciados
 //   (e usados pelo próprio relay para descobrir o endereço público).
 
+#include "LogStore.h"
 #include "ServerHost.h"
 
 #include <QCommandLineParser>
 #include <QCoreApplication>
 #include <QJsonDocument>
 #include <QStandardPaths>
+
+#include <memory>
 
 using namespace openspeak;
 
@@ -28,6 +33,24 @@ static QJsonArray iceServersFromEnv()
         qWarning("OPENSPEAK_ICE inválido, usando padrão");
     }
     return QJsonArray{QJsonObject{{"urls", "stun:stun.l.google.com:19302"}}};
+}
+
+// Registros do servidor: continuam no stderr (journal) e vão também para o arquivo do dia.
+static LogStore *g_logs = nullptr;
+static QtMessageHandler g_previousHandler = nullptr;
+
+static void logToFile(QtMsgType type, const QMessageLogContext &context, const QString &message)
+{
+    if (g_logs) {
+        static const char *const levels[] = {"D", "W", "C", "F", "I"}; // ordem do QtMsgType
+        const char *level = type >= 0 && type <= QtInfoMsg ? levels[type] : "?";
+        const QString category = context.category && qstrcmp(context.category, "default") != 0
+                                     ? QString::fromLatin1(context.category) + QStringLiteral(": ")
+                                     : QString();
+        g_logs->appendServer(QString::fromLatin1(level) + QLatin1Char(' ') + category + message);
+    }
+    if (g_previousHandler)
+        g_previousHandler(type, context, message);
 }
 
 static QString defaultWebRoot()
@@ -93,6 +116,16 @@ int main(int argc, char *argv[])
     options.profilesFile = qEnvironmentVariable("OPENSPEAK_PROFILES_FILE");
     if (options.profilesFile.isEmpty())
         options.profilesFile = QDir(QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)).filePath(QStringLiteral("profiles.json"));
+    QString logDir = qEnvironmentVariable("OPENSPEAK_LOG_DIR");
+    std::unique_ptr<LogStore> logs;
+    if (logDir.compare(QLatin1String("off"), Qt::CaseInsensitive) != 0) {
+        if (logDir.isEmpty())
+            logDir = QDir(QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)).filePath(QStringLiteral("logs"));
+        logs = std::make_unique<LogStore>(logDir);
+        g_logs = logs.get();
+        g_previousHandler = qInstallMessageHandler(logToFile);
+        options.logs = logs.get();
+    }
     if (!ServerHost::sfuAvailable() && (parser.isSet(rtcPortOpt) || parser.isSet(publicIpOpt)))
         qWarning("compilado sem o relay SFU: --rtc-port/--public-ip ignorados");
 
@@ -110,11 +143,16 @@ int main(int argc, char *argv[])
         qInfo().noquote() << (options.password.isEmpty() ? QStringLiteral("[openspeak] servidor aberto (sem OPENSPEAK_PASSWORD)")
                                                          : QStringLiteral("[openspeak] servidor privado: login exige senha"));
     qInfo().noquote() << QStringLiteral("[openspeak] perfis em %1").arg(options.profilesFile);
+    qInfo().noquote() << (logs ? QStringLiteral("[openspeak] registros do servidor e dos clientes em %1").arg(logs->dir())
+                               : QStringLiteral("[openspeak] registros em arquivo desligados (OPENSPEAK_LOG_DIR=off)"));
     if (host.sfuEnabled())
         qInfo().noquote() << QStringLiteral("[openspeak] relay SFU: UDP %1%2")
                                  .arg(options.rtcPort ? QString::number(options.rtcPort) : QStringLiteral("(portas efêmeras)"),
                                       options.publicIp.isEmpty() ? QString() : QStringLiteral(", anunciando %1").arg(options.publicIp));
     else
         qInfo().noquote() << QStringLiteral("[openspeak] relay SFU desativado (só P2P)");
-    return app.exec();
+    const int code = app.exec();
+    qInstallMessageHandler(g_previousHandler);
+    g_logs = nullptr;
+    return code;
 }

@@ -5,6 +5,7 @@
 // --profile separa identidade/configurações (duas instâncias na mesma máquina).
 // --debug   habilita a fonte "Padrão de teste" no diálogo de transmissão.
 
+#include "ClientLog.h"
 #include "ConnectionHandler.h"
 #include "Layout.h"
 #include "PeerDirectory.h"
@@ -132,6 +133,10 @@ int main(int argc, char *argv[])
     // Com G-Sync em janela, o driver NVIDIA faz o monitor seguir os quadros da UI e a tela pisca.
     if (!parser.isSet(uiSmokeOpt))
         disableGsyncInBackground();
+    // Registros em arquivo (e para o servidor, abaixo) desde o começo.
+    if (!parser.isSet(uiSmokeOpt)) // os testes de interface não enchem a pasta do usuário
+        ClientLog::install(parser.value(profileOpt));
+    qInfo().noquote() << "OpenSpeak" << openspeak::version() << "iniciado";
     Settings settings(parser.value(profileOpt), parser.isSet(debugOpt));
     settings.refreshLaunchAtStartup();
     // A janela pode ficar escondida na bandeja; quem encerra é o "Sair" (Main.qml).
@@ -158,6 +163,7 @@ int main(int argc, char *argv[])
         const quint16 meshPort = parser.isSet(meshPortOpt) ? quint16(parser.value(meshPortOpt).toUInt()) : MeshConnection::DefaultPort;
         handler.setDirectory(new TailscaleDirectory(meshPort, &handler));
     }
+    ClientLog logUploader(&handler, openspeak::version(), [&settings] { return settings.sendLogs(); });
     ScreenshareManager screenshare(&handler, &settings);
     SoundEffects sounds(&handler, &screenshare, &settings);
     QObject::connect(&app, &QCoreApplication::aboutToQuit, &handler, &ConnectionHandler::disconnectFromServer);
@@ -345,5 +351,8 @@ int main(int argc, char *argv[])
         });
         timer->start(4000);
     }
-    return app.exec();
+    const int code = app.exec();
+    qInfo() << "OpenSpeak encerrando";
+    ClientLog::uninstall(); // antes dos estáticos irem embora
+    return code;
 }

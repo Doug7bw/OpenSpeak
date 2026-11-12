@@ -936,6 +936,21 @@ Popup {
                 onToggled: c => Settings.prereleaseUpdates = c
             }
 
+            SectionHeader { text: I18n.t("app.diagnostics") }
+            SwitchRow {
+                switchObjectName: "sendLogs"
+                title: "Enviar registros ao servidor"
+                description: "Os registros do app (erros e eventos, sem senhas) vão para o servidor e ajudam a resolver bugs. Eles também ficam no seu computador por 7 dias."
+                checked: Settings.sendLogs
+                onToggled: c => Settings.sendLogs = c
+            }
+            Button {
+                objectName: "openLogFolder"
+                flat: true
+                text: "Abrir pasta de registros"
+                onClicked: Settings.openLogFolder()
+            }
+
             SectionHeader { text: root.allChangelog ? I18n.t("app.changelog.title") : I18n.t("app.updates.changelog") }
             Label {
                 objectName: "updatesChangelog"

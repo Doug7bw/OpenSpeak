@@ -25,6 +25,7 @@ class Settings : public QObject {
     Q_PROPERTY(bool debug READ debug CONSTANT)
     Q_PROPERTY(QString connectionMode READ connectionMode WRITE setConnectionMode NOTIFY changed)
     Q_PROPERTY(bool automaticUpdates READ automaticUpdates WRITE setAutomaticUpdates NOTIFY changed)
+    Q_PROPERTY(bool sendLogs READ sendLogs WRITE setSendLogs NOTIFY changed)
     Q_PROPERTY(bool pipPinned READ pipPinned WRITE setPipPinned NOTIFY changed)
     Q_PROPERTY(bool prereleaseUpdates READ prereleaseUpdates WRITE setPrereleaseUpdates NOTIFY changed)
     Q_PROPERTY(QString updateEdition READ updateEdition WRITE setUpdateEdition NOTIFY changed)
@@ -73,6 +74,11 @@ public:
     void setConnectionMode(const QString &v) { set("connectionMode", v); }
     bool automaticUpdates() const { return value("automaticUpdates", true).toBool(); }
     void setAutomaticUpdates(bool v) { set("automaticUpdates", v); }
+    /// Envia os registros (logs) do app ao servidor, se ele aceitar (CLIENT_LOGS).
+    bool sendLogs() const { return value("sendLogs", true).toBool(); }
+    void setSendLogs(bool v) { set("sendLogs", v); }
+    /// Abre no Explorer a pasta dos registros locais.
+    Q_INVOKABLE void openLogFolder() const;
     /// Janela picture-in-picture por cima de todos os apps.
     bool pipPinned() const { return value("pipPinned", true).toBool(); }
     void setPipPinned(bool v) { set("pipPinned", v); }

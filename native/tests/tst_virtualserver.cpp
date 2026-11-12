@@ -1,9 +1,13 @@
 // Mesmos cenários de test/server.test.js, contra a porta C++.
 
+#include "LogStore.h"
 #include "VirtualServer.h"
 
 #include <QDateTime>
+#include <QDir>
+#include <QDirIterator>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonDocument>
 #include <QTemporaryDir>
 #include <QTest>
@@ -85,6 +89,67 @@ private slots:
     }
 
     void cleanup() { server.reset(); } // antes dos relays falsos (locais a cada teste)
+
+    // ---- registros dos clientes (CLIENT_LOGS)
+
+    void clientLogsNeedTheSink()
+    {
+        const int a = login("Jonas");
+        QVERIFY(!server->handle(a, "sync", {}).value("server").toObject().value("capabilityExtensions").toArray().contains(CapClientLogs));
+        QCOMPARE(expectError(a, "clientlog", {{"lines", QJsonArray{"oi"}}}), rc::UnknownCommand);
+    }
+
+    void clientLogsReachTheStore()
+    {
+        QTemporaryDir dir;
+        LogStore store(dir.path());
+        server->setClientLogSink([&](const QString &nick, int clid, const QString &version, const QStringList &lines) {
+            store.appendClient(nick, clid, version, lines);
+        });
+        const int a = login("Jo/na:s");
+        QVERIFY(server->handle(a, "sync", {}).value("server").toObject().value("capabilityExtensions").toArray().contains(CapClientLogs));
+        server->handle(a, "clientlog", {{"version", "1.0.42"}, {"lines", QJsonArray{"primeira", "segunda\nforjada", 3}}});
+        QCOMPARE(expectError(a, "clientlog", {{"lines", "texto"}}), rc::InvalidArgs);
+        QJsonArray tooMany;
+        for (int i = 0; i <= ClientLogMaxLines; ++i)
+            tooMany.append("x");
+        QCOMPARE(expectError(a, "clientlog", {{"lines", tooMany}}), rc::PayloadTooLarge);
+
+        QFile file(QDir(dir.path()).filePath(QStringLiteral("clients/%1/Jo_na_s.log").arg(QDate::currentDate().toString(Qt::ISODate))));
+        QStringList found;
+        for (QDirIterator it(dir.path(), QDir::Files, QDirIterator::Subdirectories); it.hasNext();)
+            found << it.next();
+        QVERIFY2(file.open(QIODevice::ReadOnly), qPrintable(found.join(", ")));
+        const QStringList rows = QString::fromUtf8(file.readAll()).split('\n', Qt::SkipEmptyParts);
+        QCOMPARE(rows.size(), 2); // o número não é texto; a quebra não vira linha nova
+        QVERIFY(rows[0].contains(QStringLiteral("[clid %1 v1.0.42] primeira").arg(a)));
+        QVERIFY(rows[1].endsWith("segunda forjada"));
+    }
+
+    void logStoreQuotaAndPrune()
+    {
+        QTemporaryDir dir;
+        LogStore store(dir.path(), 14);
+        const QString big(LogStore::MaxLineChars, 'a');
+        int written = 0;
+        for (int i = 0; i < 4000 && store.appendClient("x", 1, {}, QStringList(LogStore::MaxLinesPerBatch, big)) > 0; ++i)
+            written++;
+        const QString today = QDir(dir.path()).filePath(QStringLiteral("clients/%1/x.log").arg(QDate::currentDate().toString(Qt::ISODate)));
+        QVERIFY(QFileInfo(today).size() <= LogStore::ClientDailyBytes + 1024);
+        QCOMPARE(store.appendClient("x", 1, {}, {"mais"}), 0);
+
+        const QString old = QDate::currentDate().addDays(-20).toString(Qt::ISODate);
+        QDir(dir.path()).mkpath("clients/" + old);
+        QFile f(QDir(dir.path()).filePath("server-" + old + ".log"));
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.close();
+        store.appendServer("linha do servidor");
+        store.prune();
+        QVERIFY(!QFileInfo::exists(f.fileName()));
+        QVERIFY(!QFileInfo::exists(QDir(dir.path()).filePath("clients/" + old)));
+        QVERIFY(QFileInfo::exists(today));
+        QVERIFY(QFileInfo::exists(QDir(dir.path()).filePath("server-" + QDate::currentDate().toString(Qt::ISODate) + ".log")));
+    }
 
     // ---- perfis (mesmos cenários de test/server.test.js)
 

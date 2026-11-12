@@ -122,6 +122,7 @@ const QHash<QString, VirtualServer::Handler> &VirtualServer::handlers()
         {QStringLiteral("login"), &VirtualServer::cmdLogin},
         {QStringLiteral("sync"), &VirtualServer::cmdSync},
         {QStringLiteral("heartbeat"), &VirtualServer::cmdHeartbeat},
+        {QStringLiteral("clientlog"), &VirtualServer::cmdClientLog},
         {QStringLiteral("clientmove"), &VirtualServer::cmdClientMove},
         {QStringLiteral("clientupdate"), &VirtualServer::cmdClientUpdate},
         {QStringLiteral("setprofilepassword"), &VirtualServer::cmdSetProfilePassword},
@@ -320,6 +321,26 @@ QJsonObject VirtualServer::cmdSync(Client &client, const QJsonObject &) { return
 
 QJsonObject VirtualServer::cmdHeartbeat(Client &, const QJsonObject &) { return {}; }
 
+QJsonObject VirtualServer::cmdClientLog(Client &client, const QJsonObject &args)
+{
+    if (!m_clientLog)
+        fail(rc::UnknownCommand, QStringLiteral("este servidor não guarda registros"));
+    const QJsonValue linesValue = args.value("lines");
+    if (!linesValue.isArray())
+        fail(rc::InvalidArgs, QStringLiteral("lines deve ser uma lista"));
+    const QJsonArray array = linesValue.toArray();
+    if (array.size() > ClientLogMaxLines)
+        fail(rc::PayloadTooLarge);
+    QStringList lines;
+    lines.reserve(array.size());
+    for (const QJsonValue &v : array)
+        if (v.isString())
+            lines.append(v.toString());
+    if (!lines.isEmpty())
+        m_clientLog(client.nickname, client.clid, args.value("version").toString().left(32), lines);
+    return {};
+}
+
 QJsonObject VirtualServer::view(const Client &client) const
 {
     QJsonArray channels, clients, streams;
@@ -329,6 +350,8 @@ QJsonObject VirtualServer::view(const Client &client) const
         caps.append(CapStreamP2P);
     caps.append(CapProfiles);
     caps.append(CapProfileMedia);
+    if (m_clientLog)
+        caps.append(CapClientLogs);
     if (m_relay) {
         caps.append(CapStreamSFU);
         caps.append(CapStreamSimulcast);

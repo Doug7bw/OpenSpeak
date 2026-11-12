@@ -41,6 +41,15 @@ ServerHost::ServerHost(Options options, QObject *parent)
 {
     m_server.setPassword(currentPassword());
     m_server.setProfilesFile(m_options.profilesFile);
+    if (LogStore *logs = m_options.logs) {
+        m_server.setClientLogSink([logs](const QString &nickname, int clid, const QString &version, const QStringList &lines) {
+            logs->appendClient(nickname, clid, version, lines);
+        });
+        logs->prune();
+        m_logPrune.setInterval(60 * 60 * 1000);
+        connect(&m_logPrune, &QTimer::timeout, this, [logs] { logs->prune(); });
+        m_logPrune.start();
+    }
 #ifdef OPENSPEAK_HAS_SFU
     if (m_options.sfu) {
         SfuRelay::Options relay;

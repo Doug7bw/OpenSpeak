@@ -48,6 +48,10 @@ inline const QString CapStreamSFU = QStringLiteral("STREAM_SFU"); // só com rel
 inline const QString CapStreamSimulcast = QStringLiteral("STREAM_SFU_SIMULCAST");
 inline const QString CapProfiles = QStringLiteral("PROFILES");    // perfis guardados no servidor
 inline const QString CapProfileMedia = QStringLiteral("PROFILE_MEDIA"); // banner baixado sob demanda
+/// O servidor guarda os registros (logs) que o cliente manda com `clientlog`
+/// {version, lines: [texto]}, para investigar bugs. Até ClientLogMaxLines por comando.
+inline const QString CapClientLogs = QStringLiteral("CLIENT_LOGS");
+constexpr int ClientLogMaxLines = 500;
 
 /// clid reservado do servidor como par WebRTC nos streams SFU (`streamsignaling`/`peerClid`).
 constexpr int RelayClid = 0;

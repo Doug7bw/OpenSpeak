@@ -3,6 +3,7 @@
 // Com OPENSPEAK_HAS_SFU, também o relay de mídia (STREAM_SFU) numa porta UDP própria.
 
 #include "DiscordAuth.h"
+#include "LogStore.h"
 #include "VirtualServer.h"
 
 #include <QDir>
@@ -35,6 +36,7 @@ public:
         QString password;     // exigida no login (vazia = servidor aberto)
         QString passwordFile; // se existir, vale no lugar de `password` (o monitor troca a senha nele)
         QString profilesFile; // JSON dos perfis (vazio = só na memória)
+        LogStore *logs = nullptr; // guarda os registros dos clientes (CLIENT_LOGS); nulo = não guarda
     };
 
     explicit ServerHost(Options options, QObject *parent = nullptr);
@@ -86,6 +88,7 @@ private:
     };
     QHash<int, ConnectionInfo> m_connectionInfo;
     QTimer m_heartbeat;
+    QTimer m_logPrune;
     QTimer m_monitoring;
     QString m_monitoringFile;
     quint64 m_signalingRx = 0, m_signalingTx = 0;

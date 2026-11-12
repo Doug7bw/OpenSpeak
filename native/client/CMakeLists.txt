@@ -5,6 +5,7 @@ find_package(Qt6 REQUIRED COMPONENTS MultimediaPrivate)
 add_library(openspeak_engine STATIC
     core/ServerConnection.cpp core/ServerConnection.h
     core/ConnectionHandler.cpp core/ConnectionHandler.h
+    core/ClientLog.cpp core/ClientLog.h
     core/Settings.cpp core/Settings.h
     core/AutoUpdater.cpp core/AutoUpdater.h core/UpdatePolicy.cpp core/UpdatePolicy.h
     mesh/PeerDirectory.cpp mesh/PeerDirectory.h

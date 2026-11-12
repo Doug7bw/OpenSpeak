@@ -10,6 +10,7 @@
 //   OPENSPEAK_LIVE_WEBHOOK         URL que recebe POST do /api/live quando muda (bot do Discord)
 //   OPENSPEAK_LIVE_WEBHOOK_SECRET  enviado no header X-OpenSpeak-Secret
 //   OPENSPEAK_PROFILES_FILE  JSON dos perfis (padrão: ~/.openspeak/profiles.json)
+//   OPENSPEAK_LOG_DIR    registros do servidor e dos clientes (padrão: ~/.openspeak/logs; "off" desliga)
 
 import http from 'node:http';
 import https from 'node:https';
@@ -20,6 +21,7 @@ import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { VirtualServer, CommandError } from './virtualServer.js';
 import { ProfileStore } from './profileStore.js';
+import { LogStore } from './logStore.js';
 import { ReturnCode } from './protocol.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
@@ -117,7 +119,28 @@ function liveChanged() {
   }, 300);
 }
 
+// Registros: o console continua igual e cada linha vai também para o arquivo do dia.
+const LOG_DIR = process.env.OPENSPEAK_LOG_DIR ?? path.join(os.homedir(), '.openspeak', 'logs');
+const logs = LOG_DIR.toLowerCase() === 'off' ? null : new LogStore(LOG_DIR);
+const logText = (p) => {
+  if (p instanceof Error) return p.stack ?? String(p);
+  if (typeof p === 'string') return p;
+  try { return JSON.stringify(p); } catch { return String(p); }
+};
+if (logs) {
+  for (const [method, level] of [['log', 'I'], ['info', 'I'], ['warn', 'W'], ['error', 'C']]) {
+    const original = console[method].bind(console);
+    console[method] = (...parts) => {
+      logs.appendServer(`${level} ${parts.map((p) => logText(p)).join(' ')}`);
+      original(...parts);
+    };
+  }
+  logs.prune();
+  setInterval(() => logs.prune(), 60 * 60 * 1000).unref();
+}
+
 const server = new VirtualServer({
+  clientLog: logs ? (nickname, clid, version, lines) => logs.appendClient(nickname, clid, version, lines) : null,
   name: process.env.OPENSPEAK_NAME ?? 'OpenSpeak',
   iceServers: parseIceServers(),
   onLiveChanged: liveChanged,
@@ -199,5 +222,6 @@ wss.on('close', () => clearInterval(heartbeat));
 httpServer.listen(PORT, HOST, () => {
   const scheme = secure ? 'https' : 'http';
   console.log(`[openspeak] servidor "${server.name}" em ${scheme}://localhost:${PORT}`);
+  console.log(logs ? `[openspeak] registros do servidor e dos clientes em ${logs.dir}` : '[openspeak] registros em arquivo desligados (OPENSPEAK_LOG_DIR=off)');
   if (!secure) console.log('[openspeak] dica: fora de localhost o navegador exige HTTPS para capturar tela/câmera (ver README).');
 });

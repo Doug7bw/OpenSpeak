@@ -7,7 +7,7 @@
 
 import {
   StreamAccess, StreamMode, StreamType, LeaveReason, ReturnCode, CAPABILITIES,
-  CAP_PROFILES, CAP_PROFILE_MEDIA, MAX_STREAMS_PER_CLIENT, MAX_THUMBNAIL_BYTES, MAX_SIGNALING_BYTES, MAX_AVATAR_BYTES, MAX_PROFILE_MEDIA_BYTES,
+  CAP_PROFILES, CAP_PROFILE_MEDIA, CAP_CLIENT_LOGS, CLIENT_LOG_MAX_LINES, MAX_STREAMS_PER_CLIENT, MAX_THUMBNAIL_BYTES, MAX_SIGNALING_BYTES, MAX_AVATAR_BYTES, MAX_PROFILE_MEDIA_BYTES,
 } from './protocol.js';
 import { profileKey } from './profileStore.js';
 
@@ -50,8 +50,9 @@ export class VirtualServer {
    * @param {{name:string, description:string}[]} [options.channels] canais (padrão: só o "Geral")
    * @param {import('./profileStore.js').ProfileStore|null} [options.profiles] perfis (sem ele, servidor sem PROFILES)
    */
-  constructor({ send, name = 'OpenSpeak', iceServers = [], idPrefix = '', onLiveChanged = null, channels = DEFAULT_CHANNELS, profiles = null }) {
+  constructor({ send, name = 'OpenSpeak', iceServers = [], idPrefix = '', onLiveChanged = null, channels = DEFAULT_CHANNELS, profiles = null, clientLog = null }) {
     this.send = send;
+    this.clientLog = clientLog; // (nickname, clid, version, lines) => void; habilita CLIENT_LOGS
     this.profiles = profiles;
     this.onLiveChanged = onLiveChanged;
     this.name = name;
@@ -188,6 +189,16 @@ export class VirtualServer {
         clients: [...this.clients.values()].filter(c => c.loggedIn).map(c => this.#publicClient(c)),
         streams: [...this.streams.values()].map(s => this.#publicStream(s)),
       };
+    },
+
+    clientlog(client, args) {
+      if (!this.clientLog) fail(ReturnCode.UNKNOWN_COMMAND, 'este servidor não guarda registros');
+      if (!Array.isArray(args.lines)) fail(ReturnCode.INVALID_ARGS, 'lines deve ser uma lista');
+      if (args.lines.length > CLIENT_LOG_MAX_LINES) fail(ReturnCode.PAYLOAD_TOO_LARGE);
+      const lines = args.lines.filter((l) => typeof l === 'string');
+      const version = typeof args.version === 'string' ? args.version.slice(0, 32) : '';
+      if (lines.length) this.clientLog(client.nickname, client.clid, version, lines);
+      return {};
     },
 
     clientmove(client, args) {
@@ -445,7 +456,9 @@ export class VirtualServer {
   // ------------------------------------------------------------- auxiliares
 
   #capabilities() {
-    return this.profiles ? [...CAPABILITIES, CAP_PROFILES, CAP_PROFILE_MEDIA] : [...CAPABILITIES];
+    const caps = this.profiles ? [...CAPABILITIES, CAP_PROFILES, CAP_PROFILE_MEDIA] : [...CAPABILITIES];
+    if (this.clientLog) caps.push(CAP_CLIENT_LOGS);
+    return caps;
   }
 
   #checkProfilePassword(key, password) {

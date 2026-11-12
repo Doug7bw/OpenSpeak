@@ -1,4 +1,10 @@
 #include "Settings.h"
+
+#include "ClientLog.h"
+
+#include <QDesktopServices>
+#include <QDir>
+#include <QUrl>
 #include "Presets.h"
 #include "Protocol.h"
 
@@ -167,6 +173,12 @@ void Settings::showStream(const QString &id)
     QStringList list = hiddenStreams();
     if (list.removeAll(id))
         setHiddenStreams(list);
+}
+
+void Settings::openLogFolder() const
+{
+    QDir().mkpath(ClientLog::folder());
+    QDesktopServices::openUrl(QUrl::fromLocalFile(ClientLog::folder()));
 }
 
 } // namespace openspeak

@@ -2,6 +2,7 @@
 // layout e filtro de SDP. Mesmos cenários de test/stats.test.js e test/layout.test.js.
 
 #include "AudioCapture.h"
+#include "ClientLog.h"
 #include "ConnectionHandler.h"
 #include "AudioCodec.h"
 #include "Settings.h"
@@ -14,6 +15,7 @@
 
 #include <QImage>
 #include <algorithm>
+#include <climits>
 #include <QPainter>
 #include <QSignalSpy>
 #include <QFile>
@@ -418,6 +420,25 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(decoded >= 3, 5000);
         dec.stop();
         QCOMPARE(decodedSize, QSize(640, 360));
+    }
+
+    // A fila de registros sai em lotes que cabem numa mensagem, mais antigos primeiro,
+    // e avisa quando descartou o excesso.
+    void clientLogBatchesAndDrops()
+    {
+        ClientLog::takePending(ClientLog::MaxQueued, INT_MAX); // limpa
+        for (int i = 0; i < ClientLog::MaxQueued + 3; ++i)
+            ClientLog::enqueueForTest(QStringLiteral("linha %1").arg(i));
+        QStringList first = ClientLog::takePending(10);
+        QCOMPARE(first.size(), 10);
+        QVERIFY(first[0].contains("3 registros antigos descartados"));
+        QCOMPARE(first[1], QStringLiteral("linha 3"));
+        ClientLog::takePending(ClientLog::MaxQueued, INT_MAX);
+        const QString big(100 * 1024, 'x');
+        for (int i = 0; i < 5; ++i)
+            ClientLog::enqueueForTest(big);
+        QCOMPARE(ClientLog::takePending(500).size(), 1); // 200 KB cada em JSON: um por lote
+        ClientLog::takePending(ClientLog::MaxQueued, INT_MAX);
     }
 
     void opusRoundTrip()
