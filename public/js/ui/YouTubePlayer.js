@@ -181,7 +181,8 @@ export class YouTubePlayer {
   #report() {
     if (!this.publish || !this.ready || this.closed || this.failed) return;
     const status = this.player.getPlayerState();
-    if (![PLAYING, PAUSED, ENDED].includes(status)) return;
+    // Durante uma busca, o player pode informar a nova posição antes de retomar.
+    if (![PLAYING, PAUSED, ENDED, BUFFERING].includes(status)) return;
     const state = { position: this.player.getCurrentTime(), playing: status === PLAYING, rate: this.player.getPlaybackRate() };
     if (!Number.isFinite(state.position) || !Number.isFinite(state.rate)) return;
     const now = performance.now();
