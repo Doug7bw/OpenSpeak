@@ -1,3 +1,13 @@
+# OpenSpeak 1.0.42 — registros para resolver bugs
+
+- O app agora guarda **registros** (o que ele faz e os erros que encontra) num
+  arquivo por dia no seu computador, por 7 dias.
+- Esses registros também vão para o **servidor**, para ficar mais fácil
+  descobrir o que aconteceu quando algo dá errado (por exemplo, uma transmissão
+  sem som). Senhas não vão nos registros.
+- Em **Configurações > Diagnóstico** dá para desligar o envio ao servidor e
+  abrir a pasta dos registros.
+
 # OpenSpeak 1.0.41 — áudio que não some mais
 
 - **Áudio da transmissão corrigido:** às vezes a transmissão ia sem som, ou o som
