@@ -58,6 +58,33 @@ Abra `http://localhost:9988`. Para testar sozinho, abra duas abas com perfis dif
 Com `?debug`, o diálogo de transmissão ganha a aba **Teste**, um padrão animado com tom de
 áudio. Ela permite validar o motor sem o seletor de tela do sistema.
 
+Para compartilhar um vídeo local no Chrome ou no Edge, abra **Iniciar transmissão → Arquivos**,
+escolha um MP4 ou WebM com codecs suportados pelo navegador e inicie a transmissão.
+Ela entra pausada. Quando os espectadores entrarem, clique em **Reproduzir vídeo** no
+quadro da transmissão. O áudio do arquivo é incluído se **Capturar áudio** estiver marcado.
+
+Para assistir juntos, abra **Iniciar transmissão → YouTube**, cole o link do vídeo
+e clique em **Ficar ao vivo**. Quando os espectadores entrarem, dê play no player
+do YouTube. O anfitrião sincroniza a reprodução, a pausa e a posição na sala.
+Se o navegador bloquear o início automático, o espectador pode clicar em
+**Reproduzir** no próprio player ou usar **Sincronizar com o anfitrião**.
+
+O player está disponível no cliente web com o servidor Node. Cada navegador carrega
+o vídeo do YouTube. Use vídeos que permitam reprodução incorporada. O player do
+YouTube tem controles próprios e a camada de desenhos fica nas fontes capturadas.
+
+A fonte Torrent está desativada temporariamente.
+
+### Desenhar sobre a transmissão
+
+No player web, o lápis ativa o desenho com mouse, toque ou caneta. Quem está
+assistindo e o anfitrião podem desenhar. Cada traço some 5 segundos depois de começar.
+O nome do autor aparece nos 3 primeiros segundos e ao passar o mouse sobre o traço.
+Abra **Desenhos visíveis** (ícone de olho)
+para ocultar todos os desenhos de outras pessoas ou só os de um participante.
+Cada pessoa controla o que aparece no próprio player. Os controles aparecem no
+cliente web conectado a um servidor próprio que suporta desenhos.
+
 ### Rede local / internet
 
 Fora de `localhost`, o navegador só libera captura de tela e câmera em HTTPS:

@@ -7,7 +7,7 @@
 // - Roteia `notifystreamsignaling` para a sessão correta.
 
 import { EventEmitter } from '../core/EventEmitter.js';
-import { StreamAccess, StreamMode, LeaveReason, Severity, RELAY_CLID } from '../core/protocol.js';
+import { StreamAccess, StreamMode, StreamType, LeaveReason, Severity, RELAY_CLID } from '../core/protocol.js';
 import { SharedVideoSource } from './SharedVideoSource.js';
 import { SessionOutbound } from './SessionOutbound.js';
 import { SessionInbound } from './SessionInbound.js';
@@ -69,13 +69,22 @@ export class ScreenshareManager extends EventEmitter {
     // e fora da interface. Sem relay (servidor Node/sala web), P2P é o único modo.
     const sfu = this.handler.hasStreamingSFU;
     config = { ...config, mode: sfu ? StreamMode.SFU : StreamMode.P2P };
-    if (!sfu && !this.handler.hasStreamingP2P) throw new Error('streaming_not_supported_by_server');
+    if (!sfu && !this.handler.hasStreamingP2P) {
+      source?.stop();
+      throw new Error('streaming_not_supported_by_server');
+    }
     source ??= await SharedVideoSource.open({ type: config.type, audio: config.audio, quality });
+    const paused = source.type === StreamType.FILE;
     let streamIdentifier;
     try {
+      if (paused) {
+        if (!source.active || source.fileVideo.error) throw new Error('video.error.file_unplayable');
+        await source.setPaused(true);
+      }
       ({ streamIdentifier } = await this.connection.sendCommand('setupstream', {
         ...this.#wireConfig(config),
         type: source.type,
+        ...(paused ? { paused } : {}),
         quality: { width: quality.width, height: quality.height, fps: quality.fps },
       }));
     } catch (err) {
@@ -91,7 +100,7 @@ export class ScreenshareManager extends EventEmitter {
       joinRequests: new Map(),
       viewers: new Set(),
       banned: new Set(),
-      paused: false,
+      paused,
       thumbTimer: null,
     };
     this.ownStreams.set(streamIdentifier, own);
@@ -104,13 +113,43 @@ export class ScreenshareManager extends EventEmitter {
     return own;
   }
 
+  async startYouTube({ config, quality, youtube }) {
+    if (!this.handler.hasStreamYouTube) throw new Error('video.youtube.unsupported');
+    if (this.#youtubeInUse()) throw new Error('video.youtube.in_use');
+    this.openingYouTube = true;
+    try {
+      config = { ...config, type: StreamType.YOUTUBE, mode: StreamMode.NONE, audio: true };
+      const { streamIdentifier } = await this.connection.sendCommand('setupstream', { ...this.#wireConfig(config), ...youtube });
+      const own = {
+        streamIdentifier, config, quality, source: null, youtube: { ...youtube, rate: 1, playing: false },
+        sessions: new Map(), joinRequests: new Map(), viewers: new Set(), banned: new Set(), paused: true,
+      };
+      this.ownStreams.set(streamIdentifier, own);
+      this.emit('ownstreamstarted', own);
+      this.emit('changed');
+      return own;
+    } finally {
+      this.openingYouTube = false;
+    }
+  }
+
+  #youtubeInUse() {
+    return this.openingYouTube || [...this.ownStreams.values()].some(own => own.youtube)
+      || [...this.inbound.values()].some(view => view.type === StreamType.YOUTUBE && view.status !== InboundStatus.ERROR);
+  }
+
+  publishYouTube(streamIdentifier, state) {
+    if (!this.ownStreams.get(streamIdentifier)?.youtube) return Promise.resolve();
+    return this.connection.sendCommand('streamyoutube', { streamIdentifier, ...state });
+  }
+
   async updateStream(streamIdentifier, { config, quality }) {
     const own = this.#own(streamIdentifier);
     // O modo não muda com o stream no ar.
     if (config) own.config = { ...own.config, ...config, mode: own.config.mode };
     if (quality) {
       own.quality = { ...own.quality, ...quality };
-      await own.source.applyQuality(own.quality);
+      await own.source?.applyQuality(own.quality);
     }
     for (const { session } of own.sessions.values()) {
       session.applyEncoding({ bitrate: own.config.bitrate, audioBitrate: own.quality.audioBitrate, quality: own.quality });
@@ -128,9 +167,18 @@ export class ScreenshareManager extends EventEmitter {
 
   /** Troca a captura de um stream ativo sem renegociar com os espectadores. */
   async changeSource(streamIdentifier, next) {
-    const own = this.#own(streamIdentifier);
-    await next.applyQuality(own.quality);
-    await own.source.replaceWith(next);
+    let own;
+    try {
+      own = this.#own(streamIdentifier);
+      await next.applyQuality(own.quality);
+      if (!own.paused && next.fileVideo) await next.playFile();
+      if (!this.ownStreams.has(streamIdentifier)) throw new Error('stream_not_found');
+      if (next.fileVideo && (!next.active || next.fileVideo.error)) throw new Error('video.error.file_unplayable');
+    } catch (err) {
+      next.stop();
+      throw err;
+    }
+    own.source.replaceWith(next);
     own.config.type = own.source.type;
     await this.connection.sendCommand('updatestream', { streamIdentifier, type: own.source.type });
     this.emit('changed');
@@ -138,8 +186,9 @@ export class ScreenshareManager extends EventEmitter {
 
   async setPaused(streamIdentifier, paused) {
     const own = this.#own(streamIdentifier);
+    await own.source.setPaused(paused);
+    if (!this.ownStreams.has(streamIdentifier)) return;
     own.paused = paused;
-    own.source.setPaused(paused);
     await this.connection.sendCommand('updatestream', { streamIdentifier, paused });
     this.emit('changed');
   }
@@ -180,9 +229,14 @@ export class ScreenshareManager extends EventEmitter {
     if (!info) throw new Error('stream_not_found');
     const existing = this.inbound.get(streamIdentifier);
     if (existing && existing.status !== InboundStatus.ERROR) return existing;
+    if (info.type === StreamType.YOUTUBE) {
+      if (!this.handler.hasStreamYouTube) throw new Error('video.youtube.unsupported');
+      if (this.#youtubeInUse()) throw new Error('video.youtube.in_use');
+    }
     if (existing) this.#disposeInbound(existing);
     const view = {
       streamIdentifier,
+      type: info.type,
       ownerClid: info.ownerClid,
       peerClid: info.ownerClid,
       status: InboundStatus.WAITING,
@@ -197,7 +251,8 @@ export class ScreenshareManager extends EventEmitter {
     this.inbound.set(streamIdentifier, view);
     this.emit('changed');
     try {
-      await this.connection.sendCommand('joinstreamrequest', { streamIdentifier, codecs: localDecodeCodecs() });
+      const args = info.type === StreamType.YOUTUBE ? { youtube: true } : { codecs: localDecodeCodecs() };
+      await this.connection.sendCommand('joinstreamrequest', { streamIdentifier, ...args });
     } catch (err) {
       this.#setInboundError(view, JOIN_ERROR_KEYS[err.returnCode] ?? 'video.join.error.generic', { reason: err.message });
     }
@@ -244,6 +299,15 @@ export class ScreenshareManager extends EventEmitter {
     c.on('notifystreamattendees', a => this.#onAttendees(a));
     c.on('notifyrespondjoinstreamrequest', a => this.#onJoinResponse(a));
     c.on('notifystreamsignaling', a => this.#onSignaling(a));
+    c.on('notifystreamannotation', annotation => this.emit('annotation', annotation));
+    c.on('notifystreamyoutube', ({ streamIdentifier, youtube }) => this.#updateYouTube(streamIdentifier, youtube));
+    this.handler.on('resumed', () => {
+      for (const [streamIdentifier, view] of this.inbound) {
+        if (!view.youtube) continue;
+        c.sendCommand('getstreamyoutube', { streamIdentifier })
+          .then(({ youtube }) => this.#updateYouTube(streamIdentifier, youtube)).catch(() => {});
+      }
+    });
     c.on('notifystreambanadded', ({ streamIdentifier, uid }) => {
       this.ownStreams.get(streamIdentifier)?.banned.add(uid);
       this.emit('changed');
@@ -287,6 +351,25 @@ export class ScreenshareManager extends EventEmitter {
     return true;
   }
 
+  annotationContext(streamIdentifier) {
+    if (!this.handler.hasStreamAnnotations) return null;
+    const own = this.ownStreams.get(streamIdentifier);
+    const view = this.inbound.get(streamIdentifier);
+    if (own?.youtube || view?.youtube) return null;
+    if (!own && view?.status !== InboundStatus.PLAYING && view?.status !== InboundStatus.RECONNECTING) return null;
+
+    const clid = this.handler.ownClid;
+    const owner = own ? clid : view.ownerClid;
+    const viewers = own ? own.viewers : (view.attendees ?? []);
+    const participants = new Map([owner, ...viewers].map(id => [id, this.handler.clientName(id)]));
+    return { streamIdentifier, self: { clid, name: this.handler.clientName(clid) }, participants };
+  }
+
+  sendAnnotation(streamIdentifier, { strokeId, points }) {
+    if (!this.handler.hasStreamAnnotations || this.handler.reconnecting) return;
+    this.connection.sendCommand('streamannotation', { streamIdentifier, strokeId, points }).catch(() => {});
+  }
+
   /**
    * Apelidos de quem assiste: nas minhas transmissões e nas que estou assistindo
    * (o servidor manda a lista aos espectadores); null se não sei.
@@ -311,6 +394,10 @@ export class ScreenshareManager extends EventEmitter {
     const own = this.ownStreams.get(streamIdentifier);
     if (!own) return;
     own.viewers.add(clid);
+    if (own.youtube) {
+      this.emit('changed');
+      return;
+    }
     if (own.config.mode === StreamMode.SFU) {
       // A mídia sai pelo relay do servidor; aqui só a lista de espectadores.
       this.emit('changed');
@@ -402,11 +489,28 @@ export class ScreenshareManager extends EventEmitter {
     }
   }
 
-  #onJoinResponse({ streamIdentifier, accepted, reason, peerClid }) {
+  #updateYouTube(streamIdentifier, youtube) {
+    const view = this.inbound.get(streamIdentifier);
+    if (!view?.youtube || view.status !== InboundStatus.PLAYING) return;
+    view.youtube = youtube;
+    this.emit('changed');
+  }
+
+  #onJoinResponse({ streamIdentifier, accepted, reason, peerClid, youtube }) {
     const view = this.inbound.get(streamIdentifier);
     if (!view) return;
     if (!accepted) {
       this.#setInboundError(view, reason === LeaveReason.BANNED ? 'video.join.error.banned' : 'video.join.error.denied');
+      return;
+    }
+    if (view.type === StreamType.YOUTUBE) {
+      if (!youtube) {
+        this.#setInboundError(view, 'video.youtube.unavailable');
+        return;
+      }
+      view.youtube = youtube;
+      view.status = InboundStatus.PLAYING;
+      this.emit('changed');
       return;
     }
     view.status = InboundStatus.CONNECTING;
@@ -500,7 +604,7 @@ export class ScreenshareManager extends EventEmitter {
   #scheduleThumbnails(own) {
     clearInterval(own.thumbTimer);
     own.thumbTimer = null;
-    if (own.config.access !== StreamAccess.PUBLIC) return;
+    if (!own.source || own.config.access !== StreamAccess.PUBLIC) return;
     const publish = async () => {
       if (own.paused || !this.ownStreams.has(own.streamIdentifier)) return;
       const thumbnail = await own.source.captureThumbnail();
@@ -538,7 +642,7 @@ export class ScreenshareManager extends EventEmitter {
       session.close();
     }
     own.sessions.clear();
-    own.source.stop();
+    own.source?.stop();
     this.ownStreams.delete(own.streamIdentifier);
     this.emit('ownstreamstopped', own);
     this.emit('changed');

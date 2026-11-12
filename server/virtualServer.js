@@ -7,9 +7,12 @@
 
 import {
   StreamAccess, StreamMode, StreamType, LeaveReason, ReturnCode, CAPABILITIES,
-  CAP_PROFILES, CAP_PROFILE_MEDIA, MAX_STREAMS_PER_CLIENT, MAX_THUMBNAIL_BYTES, MAX_SIGNALING_BYTES, MAX_AVATAR_BYTES, MAX_PROFILE_MEDIA_BYTES,
+  CAP_PROFILES, CAP_PROFILE_MEDIA, CAP_STREAM_ANNOTATIONS, CAP_STREAM_YOUTUBE,
+  ANNOTATION_SCALE, MAX_ANNOTATION_POINTS, MAX_ANNOTATION_BATCHES_PER_SECOND,
+  MAX_STREAMS_PER_CLIENT, MAX_THUMBNAIL_BYTES, MAX_SIGNALING_BYTES, MAX_AVATAR_BYTES, MAX_PROFILE_MEDIA_BYTES,
 } from './protocol.js';
 import { profileKey } from './profileStore.js';
+import { isYouTubeVideoId, isYouTubePosition, youtubePosition } from '../public/js/video/youtube.js';
 
 class CommandError extends Error {
   constructor(code, message = code) {
@@ -19,6 +22,10 @@ class CommandError extends Error {
 }
 
 const fail = (code, message) => { throw new CommandError(code, message); };
+
+function currentYouTube({ updatedAt, ...state }) {
+  return { ...state, position: youtubePosition(state, Date.now() - updatedAt) };
+}
 
 // Uma sala só: todos se encontram no "Geral".
 export const DEFAULT_CHANNELS = [
@@ -50,9 +57,11 @@ export class VirtualServer {
    * @param {{name:string, description:string}[]} [options.channels] canais (padrão: só o "Geral")
    * @param {import('./profileStore.js').ProfileStore|null} [options.profiles] perfis (sem ele, servidor sem PROFILES)
    */
-  constructor({ send, name = 'OpenSpeak', iceServers = [], idPrefix = '', onLiveChanged = null, channels = DEFAULT_CHANNELS, profiles = null }) {
+  constructor({ send, name = 'OpenSpeak', iceServers = [], idPrefix = '', onLiveChanged = null,
+    channels = DEFAULT_CHANNELS, profiles = null, streamAnnotations = true }) {
     this.send = send;
     this.profiles = profiles;
+    this.streamAnnotations = streamAnnotations;
     this.onLiveChanged = onLiveChanged;
     this.name = name;
     this.iceServers = iceServers;
@@ -278,17 +287,20 @@ export class VirtualServer {
     },
 
     setupstream(client, args) {
-      const mode = Number(args.mode ?? StreamMode.P2P);
-      if (mode !== StreamMode.P2P) fail(ReturnCode.MODE_NOT_SUPPORTED, 'o servidor só suporta STREAM_P2P');
+      const isYouTube = Number(args.type) === StreamType.YOUTUBE;
+      const mode = isYouTube ? StreamMode.NONE : Number(args.mode ?? StreamMode.P2P);
+      if (!isYouTube && mode !== StreamMode.P2P) fail(ReturnCode.MODE_NOT_SUPPORTED, 'o servidor só suporta STREAM_P2P');
       const owned = [...this.streams.values()].filter(s => s.ownerClid === client.clid);
       if (owned.length >= MAX_STREAMS_PER_CLIENT) fail(ReturnCode.STREAM_LIMIT);
+      if (isYouTube && (!isYouTubeVideoId(args.videoId) || !isYouTubePosition(args.position))) fail(ReturnCode.INVALID_ARGS);
       const stream = {
         streamIdentifier: `${this.idPrefix}s${this.nextStreamId++}`,
         ownerClid: client.clid,
         cid: client.cid,
         mode,
         created: Date.now(),
-        paused: false,
+        paused: isYouTube || args.paused === true,
+        ...(isYouTube ? { youtube: { videoId: args.videoId, position: args.position, playing: false, rate: 1, updatedAt: Date.now() } } : {}),
         thumbnail: null,
         viewers: new Set(),
         pending: new Map(), // clid -> { codecs, since }
@@ -305,9 +317,10 @@ export class VirtualServer {
 
     updatestream(client, args) {
       const stream = this.#ownStream(client, args.streamIdentifier);
+      if ('type' in args && (Number(args.type) === StreamType.YOUTUBE) !== !!stream.youtube) fail(ReturnCode.INVALID_ARGS);
       const accessBefore = stream.access;
       Object.assign(stream, this.#sanitizeStreamConfig(args, stream));
-      if ('paused' in args) stream.paused = !!args.paused;
+      if (!stream.youtube && 'paused' in args) stream.paused = !!args.paused;
       if (stream.access !== StreamAccess.PUBLIC) stream.thumbnail = null;
       this.#broadcast({ cmd: 'notifystreamupdated', args: { stream: this.#publicStream(stream), accessChanged: accessBefore !== stream.access } });
       return {};
@@ -347,6 +360,7 @@ export class VirtualServer {
 
     joinstreamrequest(client, args) {
       const stream = this.#stream(args.streamIdentifier);
+      if (stream.youtube && args.youtube !== true) fail(ReturnCode.MODE_NOT_SUPPORTED);
       if (stream.ownerClid === client.clid) fail(ReturnCode.INVALID_ARGS, 'não é possível assistir ao próprio stream');
       if (stream.cid !== client.cid) fail(ReturnCode.NOT_IN_CHANNEL);
       if (stream.banned.has(client.uid)) fail(ReturnCode.BANNED);
@@ -381,7 +395,10 @@ export class VirtualServer {
         this.send(clid, {
           type: 'notify', cmd: 'notifyrespondjoinstreamrequest',
           // peerClid: com quem o espectador negocia (aqui sempre o dono; o SFU só existe no servidor nativo).
-          args: { streamIdentifier: stream.streamIdentifier, accepted: true, ownerClid: stream.ownerClid, peerClid: stream.ownerClid },
+          args: {
+            streamIdentifier: stream.streamIdentifier, accepted: true, ownerClid: stream.ownerClid, peerClid: stream.ownerClid,
+            ...(stream.youtube ? { youtube: currentYouTube(stream.youtube) } : {}),
+          },
         });
         this.send(stream.ownerClid, {
           type: 'notify', cmd: 'notifystreamclientjoined',
@@ -424,8 +441,61 @@ export class VirtualServer {
       return {};
     },
 
+    streamyoutube(client, args) {
+      const stream = this.#ownStream(client, args.streamIdentifier);
+      const { position, playing, rate } = args;
+      if (!stream.youtube || !isYouTubePosition(position) || typeof playing !== 'boolean'
+        || !Number.isFinite(rate) || rate < 0.25 || rate > 4) fail(ReturnCode.INVALID_ARGS);
+      Object.assign(stream.youtube, { position, playing, rate, updatedAt: Date.now() });
+      stream.paused = !playing;
+      const message = {
+        type: 'notify', cmd: 'notifystreamyoutube',
+        args: { streamIdentifier: stream.streamIdentifier, youtube: currentYouTube(stream.youtube) },
+      };
+      for (const clid of stream.viewers) this.send(clid, message);
+      return {};
+    },
+
+    getstreamyoutube(client, args) {
+      const stream = this.#stream(args.streamIdentifier);
+      if (!stream.youtube || !stream.viewers.has(client.clid)) fail(ReturnCode.PERMISSION_DENIED);
+      return { youtube: currentYouTube(stream.youtube) };
+    },
+
+    streamannotation(client, args) {
+      if (!this.streamAnnotations) fail(ReturnCode.UNKNOWN_COMMAND);
+      const stream = this.#stream(args.streamIdentifier);
+      if (stream.youtube) fail(ReturnCode.MODE_NOT_SUPPORTED);
+      if (client.cid !== stream.cid || (client.clid !== stream.ownerClid && !stream.viewers.has(client.clid))) {
+        fail(ReturnCode.PERMISSION_DENIED);
+      }
+      const { strokeId, points } = args;
+      if (typeof strokeId !== 'string' || !/^[a-z0-9-]{1,48}$/i.test(strokeId)
+        || !Array.isArray(points) || !points.length || points.length > MAX_ANNOTATION_POINTS
+        || points.some(point => !Array.isArray(point) || point.length !== 2
+          || point.some(value => !Number.isInteger(value) || value < 0 || value > ANNOTATION_SCALE))) {
+        fail(ReturnCode.INVALID_ARGS);
+      }
+      const second = Math.floor(Date.now() / 1000);
+      if (client.annotationSecond !== second) {
+        client.annotationSecond = second;
+        client.annotationBatches = 0;
+      }
+      if (client.annotationBatches >= MAX_ANNOTATION_BATCHES_PER_SECOND) return {};
+      client.annotationBatches++;
+      const message = {
+        type: 'notify', cmd: 'notifystreamannotation',
+        args: { streamIdentifier: stream.streamIdentifier, clid: client.clid, name: this.#shownName(client), strokeId, points },
+      };
+      for (const clid of [stream.ownerClid, ...stream.viewers]) {
+        if (clid !== client.clid) this.send(clid, message);
+      }
+      return {};
+    },
+
     streamsignaling(client, args) {
       const stream = this.#stream(args.streamIdentifier);
+      if (stream.youtube) fail(ReturnCode.MODE_NOT_SUPPORTED);
       const target = Number(args.clid);
       const payload = args.payload;
       if (!payload || typeof payload !== 'object' || typeof payload.type !== 'string') fail(ReturnCode.INVALID_ARGS);
@@ -445,7 +515,10 @@ export class VirtualServer {
   // ------------------------------------------------------------- auxiliares
 
   #capabilities() {
-    return this.profiles ? [...CAPABILITIES, CAP_PROFILES, CAP_PROFILE_MEDIA] : [...CAPABILITIES];
+    const caps = [...CAPABILITIES, CAP_STREAM_YOUTUBE];
+    if (this.streamAnnotations) caps.push(CAP_STREAM_ANNOTATIONS);
+    if (this.profiles) caps.push(CAP_PROFILES, CAP_PROFILE_MEDIA);
+    return caps;
   }
 
   #checkProfilePassword(key, password) {

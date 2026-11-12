@@ -8,6 +8,8 @@ import { StreamAccess, StreamType, Severity, RELAY_CLID } from '../core/protocol
 import { InboundStatus } from '../video/ScreenshareManager.js';
 import { installFullscreenIdle } from './fullscreenIdle.js';
 import { viewerCount } from './viewerCount.js';
+import { StreamAnnotations } from './StreamAnnotations.js';
+import { YouTubePlayer } from './YouTubePlayer.js';
 
 const ACCESS_ICON = { [StreamAccess.PUBLIC]: 'globe', [StreamAccess.CONTACTS_ONLY]: 'contacts', [StreamAccess.PRIVATE]: 'lock' };
 const MOVE_THRESHOLD = 4;
@@ -34,8 +36,12 @@ export class StreamTile {
     this.volume = 1;
     this.muted = false;
     this.video = h('video.tile-video', { autoplay: true, playsInline: true });
+    this.annotations = new StreamAnnotations(this.video, (id, update) => actions.sendAnnotation(id, update));
     this.overlay = h('div.tile-overlay');
-    this.el = h('div.video-stream', { dataset: { stream: streamIdentifier } }, this.video, this.overlay,
+    this.youtubeBar = h('div.youtube-bar');
+    this.youtubePanel = h('div.youtube-tile', { hidden: true }, this.youtubeBar);
+    this.el = h('div.video-stream', { dataset: { stream: streamIdentifier } },
+      this.video, this.annotations.canvas, this.overlay, this.youtubePanel,
       this.#grip(true, true), this.#grip(false, true), this.#grip(true, false), this.#grip(false, false));
     this.el.addEventListener('pointerdown', ev => this.#startMove(ev));
     this.el.addEventListener('dblclick', () => (this.pipWindow ? this.togglePip() : this.toggleFullscreen()));
@@ -77,7 +83,7 @@ export class StreamTile {
   /** Arrastar o quadro o move; a folga deixa o duplo clique continuar valendo. */
   #startMove(ev) {
     if (ev.button !== 0 || !this.el.classList.contains('arrangeable') || this.pipWindow) return;
-    if (document.fullscreenElement === this.el || ev.target.closest('button, input, a, .tile-grip')) return;
+    if (document.fullscreenElement === this.el || ev.target.closest('button, input, a, summary, .tile-grip, .stream-annotations, .annotation-menu')) return;
     let rect = null;
     this.#track(ev, (dx, dy) => {
       if (!rect && Math.hypot(dx, dy) < MOVE_THRESHOLD) return;
@@ -188,12 +194,12 @@ export class StreamTile {
   }
 
   #attach(mediaStream, { muted }) {
+    this.video.muted = muted || this.muted;
     if (this._srcObject !== mediaStream) {
       this._srcObject = mediaStream;
       this.video.srcObject = mediaStream;
       if (mediaStream) this.video.play().catch(() => {});
     }
-    this.video.muted = muted || this.muted;
     this.video.volume = this.volume;
     this.video.hidden = !mediaStream;
   }
@@ -213,15 +219,48 @@ export class StreamTile {
     const el = this.el;
     el.classList.toggle('own', m.kind === 'own');
     el.classList.toggle('paused', !!m.info?.paused);
+    this.annotations.update(this.actions.annotationContext(this.streamIdentifier));
+    const youtube = m.own?.youtube ?? (m.view?.status === InboundStatus.PLAYING ? m.view.youtube : null);
+    this.youtubePanel.hidden = !youtube;
+    this.overlay.hidden = !!youtube;
+    el.classList.toggle('youtube-tile-active', !!youtube);
+    if (youtube) return this.#renderYouTube(m, youtube);
+    this.youtubePlayer?.destroy();
+    this.youtubePlayer = null;
     if (m.kind === 'own') return this.#renderOwn(m);
     return this.#renderRemote(m);
+  }
+
+  #renderYouTube(m, state) {
+    this.#attach(null, { muted: true });
+    const id = this.streamIdentifier;
+    const own = m.kind === 'own';
+    if (!this.youtubePlayer) {
+      this.youtubePlayer = new YouTubePlayer(own ? update => this.actions.publishYouTube(id, update) : null);
+      this.youtubePanel.prepend(this.youtubePlayer.el);
+    }
+    this.youtubePlayer.update(state);
+    replaceChildren(this.youtubeBar,
+      h('span.ellipsis', m.info.name),
+      viewerCount(m.info.viewerCount, () => this.actions.viewerNames(id)),
+      h('span.spacer'),
+      own ? btn('users', t('video.action.manage_viewers'), () => this.actions.manageViewers(id))
+        : btn('sync', t('video.youtube.sync'), () => this.youtubePlayer.resync()),
+      btn(m.isFocused ? 'grid' : 'focus', t(m.isFocused ? 'video.action.unfocus' : 'video.action.focus'), () => this.actions.toggleFocus(id)),
+      this.#fullscreenButton(),
+      own ? btn('stop', t('video.action.stop_stream'), () => this.actions.stopStream(id), 'danger')
+        : btn('leave', t('video.action.leave'), () => this.actions.leaveStream(id), 'danger'));
   }
 
   // ------------------------------------------------------------ próprio
 
   #renderOwn(m) {
     const { own } = m;
-    this.#attach(own.source.stream, { muted: true });
+    const fromFile = own.source.type === StreamType.FILE;
+    this.#attach(own.source.stream, { muted: !fromFile });
+    const playbackAction = own.paused
+      ? (fromFile ? 'video.action.play_file' : 'video.action.resume')
+      : 'video.action.pause';
     const pending = own.joinRequests.size;
     const a = this.actions;
     const id = own.streamIdentifier;
@@ -229,7 +268,9 @@ export class StreamTile {
       this.#topBar(m, h('span.badge.live', t('video.stream.live'))),
       own.paused ? h('div.tile-center', h('div.paused-label', icon('pause'), t('video.stream.paused'))) : null,
       h('div.tile-actions',
-        btn(own.paused ? 'play' : 'pause', t(own.paused ? 'video.action.resume' : 'video.action.pause'), () => a.togglePause(id)),
+        btn(own.paused ? 'play' : 'pause', t(playbackAction), () => a.togglePause(id)),
+        fromFile && own.source.audioTrack ? this.#volumeControl() : null,
+        this.annotations.enabled ? this.annotations.controls : null,
         btn('swap', t('video.action.change_source'), () => a.changeSource(id)),
         btn('settings', t('video.settings'), () => a.editStream(id)),
         h('span.btn-badge-wrap',
@@ -263,6 +304,7 @@ export class StreamTile {
         h('div.tile-actions',
           this.#volumeControl(),
           view.peerClid === RELAY_CLID ? this.#qualityControl(view, id) : null,
+          this.annotations.enabled ? this.annotations.controls : null,
           btn('chart', t('video.action.stats'), () => a.showStats(id)),
           h('span.spacer'),
           this.pipWindow ? null : btn('eyeOff', t('video.stream.hide_stream'), () => a.hideStream(id)),
@@ -390,6 +432,8 @@ export class StreamTile {
     this.pipWindow?.close();
     if (document.pictureInPictureElement === this.video) document.exitPictureInPicture().catch(() => {});
     this._disposeFullscreenIdle();
+    this.annotations.destroy();
+    this.youtubePlayer?.destroy();
     this.video.srcObject = null;
     this.placeholder.remove();
     this.el.remove();

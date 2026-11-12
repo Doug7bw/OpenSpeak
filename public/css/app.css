@@ -307,8 +307,35 @@ select.input { padding-right: 4px; }
 .pip-placeholder.small .icon.big { width: 28px; height: 28px; }
 .tile-btn.active { color: var(--accent); }
 .tile-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
+.youtube-tile { position: absolute; inset: 0; display: flex; flex-direction: column; background: #000; }
+.youtube-tile[hidden], .youtube-tile-active .tile-grip { display: none; }
+.youtube-player { display: flex; flex: 1; min-height: 0; flex-direction: column; background: #000; }
+.youtube-embed { flex: 1; min-height: 0; }
+.youtube-embed iframe { display: block; width: 100%; height: 100%; border: none; }
+.youtube-embed iframe[hidden] { display: none; }
+.youtube-status { margin: 0; padding: 8px 10px; font-size: 12px; color: var(--text); background: var(--panel); }
+.youtube-bar { display: flex; flex: none; align-items: center; gap: 4px; padding: 4px 8px; background: var(--panel); font-size: 13px; }
+.mobile-player.youtube .youtube-player { flex: none; height: clamp(225px, 56.25vw, 55vh); }
 .video-stream.paused .tile-video { filter: grayscale(.8) brightness(.45); }
-.tile-overlay { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: space-between; }
+.tile-overlay { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: space-between; pointer-events: none; }
+.tile-top, .tile-actions, .tile-overlay .stream-preview { pointer-events: auto; }
+.stream-annotations { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.stream-annotations.drawing { pointer-events: auto; cursor: crosshair; touch-action: none; }
+.annotation-settings { position: relative; flex: none; }
+.annotation-settings summary { list-style: none; }
+.annotation-settings summary::-webkit-details-marker { display: none; }
+.annotation-settings[open] summary, .annotation-button.active { color: var(--accent); }
+.annotation-menu {
+  position: absolute; z-index: 2; bottom: calc(100% + 4px); left: 0;
+  min-width: 188px; max-width: 235px; max-height: 200px; overflow-y: auto;
+  padding: 8px; background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); color: var(--text); box-shadow: var(--shadow);
+  font-size: 12px;
+}
+.annotation-menu label { display: flex; align-items: center; gap: 6px; padding: 4px 0; cursor: pointer; }
+.annotation-menu input { flex: none; accent-color: var(--accent); }
+.annotation-authors:not(:empty) { border-top: 1px solid var(--border); margin-top: 4px; padding-top: 4px; }
+.video-stream.small .annotation-menu { max-height: 105px; }
 
 .tile-top {
   display: flex; align-items: center; gap: 8px; padding: 8px 10px; min-width: 0;
@@ -331,6 +358,8 @@ select.input { padding-right: 4px; }
   opacity: 0; visibility: hidden; pointer-events: none;
 }
 .video-stream:fullscreen.fullscreen-idle * { cursor: none; }
+.video-stream:fullscreen.fullscreen-idle .stream-annotations.drawing { cursor: crosshair; }
+.video-stream:has(.annotation-settings[open]) .tile-actions { opacity: 1; visibility: visible; pointer-events: auto; }
 .tile-title { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; min-width: 0; }
 .tile-title .icon { width: 15px; height: 15px; color: var(--text-dim); }
 .tile-owner { color: var(--text-dim); white-space: nowrap; }
@@ -474,6 +503,8 @@ select.input { padding-right: 4px; }
 .preview-caption .icon { width: 15px; height: 15px; color: var(--online); }
 .source-pick { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .source-pick p { font-size: 12.5px; }
+.torrent-source { display: flex; flex-direction: column; gap: 8px; }
+.torrent-source > p { font-size: 12.5px; }
 .source-list { display: flex; flex-direction: column; gap: 4px; }
 .source-item {
   display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 10px; border-radius: var(--radius-sm);
@@ -536,13 +567,14 @@ body.mobile .login { overflow-y: auto; }
 .mobile-header .icon-btn { width: 40px; height: 40px; }
 .mobile-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .mobile-player { flex: none; position: relative; display: flex; flex-direction: column; background: #000; }
-.mobile-video { width: 100%; aspect-ratio: 16 / 9; object-fit: contain; background: #000; }
+.mobile-video-frame { position: relative; }
+.mobile-video { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: contain; background: #000; }
 .mobile-player-center {
   position: absolute; left: 0; right: 0; top: 0; aspect-ratio: 16 / 9; padding: 12px;
   display: grid; place-items: center; text-align: center; pointer-events: none;
 }
 .mobile-player-center > * { pointer-events: auto; }
-.mobile-controls { display: flex; align-items: center; gap: 4px; padding: 6px 8px 6px 12px; background: var(--panel); border-bottom: 1px solid var(--border); }
+.mobile-controls { position: relative; display: flex; align-items: center; gap: 4px; padding: 6px 8px 6px 12px; background: var(--panel); border-bottom: 1px solid var(--border); }
 .mobile-now { flex: 1; min-width: 0; display: flex; flex-direction: column; font-size: 13px; }
 .mobile-control {
   flex: none; display: grid; place-items: center; width: 44px; height: 44px; border: none; border-radius: var(--radius);
@@ -550,7 +582,11 @@ body.mobile .login { overflow-y: auto; }
 }
 .mobile-control.danger { color: var(--danger); }
 .mobile-player:fullscreen { justify-content: center; }
+.mobile-player:fullscreen .mobile-video-frame { height: 100%; }
 .mobile-player:fullscreen .mobile-video { height: 100%; aspect-ratio: auto; }
+.mobile-controls .annotation-button { width: 40px; height: 44px; }
+.mobile-controls .annotation-menu { right: 0; left: auto; }
+.mobile-player:fullscreen.fullscreen-idle:has(.annotation-settings[open]) .mobile-controls { opacity: 1; pointer-events: auto; }
 .mobile-player:fullscreen .mobile-player-center { bottom: 0; aspect-ratio: auto; }
 .mobile-player:fullscreen .mobile-controls { position: absolute; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, .65); border: none; transition: opacity .2s; }
 .mobile-player:fullscreen.fullscreen-idle .mobile-controls { opacity: 0; pointer-events: none; }

@@ -9,10 +9,16 @@
 
 import { EventEmitter } from '../core/EventEmitter.js';
 import { StreamType } from '../core/protocol.js';
+import { openTorrentMedia } from './TorrentMedia.js';
 
 const THUMBNAIL_WIDTH = 320;
 
 export class SharedVideoSource extends EventEmitter {
+  #fileVideo = null;
+  #cleanup = null;
+  #endListeners = null;
+  #onEnded = () => this.emit('ended');
+
   constructor() {
     super();
     this.type = StreamType.NONE;
@@ -27,6 +33,14 @@ export class SharedVideoSource extends EventEmitter {
 
   get active() {
     return !!this.videoTrack && this.videoTrack.readyState === 'live';
+  }
+
+  get fileVideo() {
+    return this.#fileVideo;
+  }
+
+  static get canCaptureFile() {
+    return typeof HTMLMediaElement.prototype.captureStream === 'function';
   }
 
   /** Track que os sinks devem enviar agora (null quando pausado). */
@@ -46,6 +60,81 @@ export class SharedVideoSource extends EventEmitter {
     const src = new SharedVideoSource();
     await src.#capture({ type, deviceId, audio, quality });
     return src;
+  }
+
+  static openFile({ file, audio, quality, signal }) {
+    return this.#openVideo({
+      audio, quality, signal,
+      load: () => {
+        const url = URL.createObjectURL(file);
+        return { url, name: file.name, close: () => URL.revokeObjectURL(url) };
+      },
+    });
+  }
+
+  static openTorrent({ magnet, audio, quality, signal, onStatus }) {
+    const timeout = AbortSignal.timeout(60_000);
+    const loading = signal ? AbortSignal.any([signal, timeout]) : timeout;
+    return this.#openVideo({
+      audio, quality, signal: loading,
+      load: video => openTorrentMedia({ magnet, video, signal: loading, onStatus }),
+    });
+  }
+
+  /** Prepara o player e captura apenas as faixas do vídeo. */
+  static async #openVideo({ audio, quality, signal, load }) {
+    if (!this.canCaptureFile) throw new Error('video.error.file_capture_unsupported');
+    signal?.throwIfAborted();
+
+    const src = new SharedVideoSource();
+    const video = document.createElement('video');
+    video.preload = 'auto';
+    video.muted = true;
+    video.playsInline = true;
+    src.#fileVideo = video;
+
+    const listeners = new AbortController();
+    try {
+      const media = await load(video);
+      src.#cleanup = () => {
+        video.pause();
+        video.removeAttribute('src');
+        video.load();
+        media.close();
+      };
+      signal?.throwIfAborted();
+      await new Promise((resolve, reject) => {
+        const options = { signal: listeners.signal, once: true };
+        video.addEventListener('loadeddata', resolve, options);
+        video.addEventListener('error', () => reject(new Error('video.error.file_unplayable')), options);
+        signal?.addEventListener('abort', () => reject(signal.reason), options);
+        video.src = media.url;
+      });
+      if (!video.videoWidth) throw new Error('video.error.file_unplayable');
+
+      src.type = StreamType.FILE;
+      src.label = media.name;
+      src.stream = video.captureStream();
+      src.videoTrack = src.stream.getVideoTracks()[0];
+      if (!src.videoTrack) throw new Error('video.error.file_unplayable');
+      if (audio) {
+        src.audioTrack = src.stream.getAudioTracks()[0] ?? null;
+      } else {
+        for (const track of src.stream.getAudioTracks()) {
+          src.stream.removeTrack(track);
+          track.stop();
+        }
+      }
+      src.#watchEnd();
+      await src.applyQuality(quality);
+      signal?.throwIfAborted();
+      return src;
+    } catch (err) {
+      src.stop();
+      throw err;
+    } finally {
+      listeners.abort();
+    }
   }
 
   /**
@@ -94,9 +183,13 @@ export class SharedVideoSource extends EventEmitter {
       osc.connect(gain).connect(dest);
       osc.start();
       media.addTrack(dest.stream.getAudioTracks()[0]);
-      src.once('stopped', () => ac.close());
+      src.#cleanup = () => ac.close();
     }
-    src.once('stopped', () => clearInterval(timer));
+    const closeAudio = src.#cleanup;
+    src.#cleanup = () => {
+      clearInterval(timer);
+      closeAudio?.();
+    };
     src.type = StreamType.SCREEN;
     src.stream = media;
     src.videoTrack = media.getVideoTracks()[0];
@@ -144,7 +237,7 @@ export class SharedVideoSource extends EventEmitter {
     if (!this.videoTrack) throw new Error('no_available_source');
     this.label = this.videoTrack.label;
     // O usuário pode encerrar pelo botão "Parar compartilhamento" do navegador.
-    this.videoTrack.addEventListener('ended', () => this.emit('ended'));
+    this.#watchEnd();
     // Se o usuário trocar de janela pelo seletor do navegador, o tipo pode mudar.
     const surface = this.videoTrack.getSettings().displaySurface;
     if (surface === 'window') this.type = StreamType.WINDOW;
@@ -175,35 +268,71 @@ export class SharedVideoSource extends EventEmitter {
    * resolução); câmera e 60 FPS priorizam fluidez.
    */
   #contentHint() {
-    if (this.type === StreamType.CAMERA) return 'motion';
+    if (this.type === StreamType.CAMERA || this.type === StreamType.FILE) return 'motion';
     if (this.quality.fps <= 5) return 'text';
     return this.quality.fps >= 60 ? 'motion' : 'detail';
   }
 
   get degradationPreference() {
     const hint = this.videoTrack?.contentHint;
-    if (hint === 'motion') return this.type === StreamType.CAMERA ? 'balanced' : 'maintain-framerate';
+    if (hint === 'motion') {
+      return this.type === StreamType.CAMERA || this.type === StreamType.FILE ? 'balanced' : 'maintain-framerate';
+    }
     return 'maintain-resolution';
   }
 
-  setPaused(paused) {
+  async playFile() {
+    if (!this.#fileVideo) return;
+    try {
+      await this.#fileVideo.play();
+    } catch {
+      throw new Error('video.error.file_unplayable');
+    }
+  }
+
+  async setPaused(paused) {
     if (this.paused === paused) return;
+    if (paused) this.#fileVideo?.pause();
+    else if (this.#fileVideo) await this.playFile();
     this.paused = paused;
     this.emit('trackschanged');
   }
 
   /** Substitui a captura mantendo os sinks (botão "Trocar fonte"). */
-  async replaceWith(other) {
-    const old = this.stream;
+  replaceWith(other) {
+    this.#release();
+    other.#endListeners?.abort();
     this.type = other.type;
     this.stream = other.stream;
     this.videoTrack = other.videoTrack;
     this.audioTrack = other.audioTrack;
     this.label = other.label;
     this.quality = other.quality;
-    this.videoTrack.addEventListener('ended', () => this.emit('ended'));
-    old?.getTracks().forEach(t => t.stop());
+    this.#fileVideo = other.#fileVideo;
+    this.#cleanup = other.#cleanup;
+    other.stream = other.videoTrack = other.audioTrack = null;
+    other.#fileVideo = other.#cleanup = null;
+    this.#watchEnd();
     this.emit('trackschanged');
+  }
+
+  #watchEnd() {
+    this.#endListeners = new AbortController();
+    const options = { signal: this.#endListeners.signal, once: true };
+    this.videoTrack.addEventListener('ended', this.#onEnded, options);
+    this.#fileVideo?.addEventListener('ended', this.#onEnded, options);
+    this.#fileVideo?.addEventListener('error', this.#onEnded, options);
+  }
+
+  #release() {
+    this.#endListeners?.abort();
+    this.stream?.getTracks().forEach(track => track.stop());
+    this.#cleanup?.();
+    this.#cleanup = null;
+    this.#fileVideo = null;
+    this.stream = null;
+    this.videoTrack = null;
+    this.audioTrack = null;
   }
 
   addSink(session) {
@@ -239,10 +368,8 @@ export class SharedVideoSource extends EventEmitter {
   }
 
   stop() {
-    this.stream?.getTracks().forEach(t => t.stop());
+    this.#release();
     this.sinks.clear();
-    this.videoTrack = null;
-    this.audioTrack = null;
     this.emit('stopped');
     this.removeAllListeners();
   }

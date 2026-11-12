@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { VirtualServer } from '../server/virtualServer.js';
-import { StreamAccess, LeaveReason } from '../server/protocol.js';
+import { StreamAccess, StreamType, LeaveReason } from '../server/protocol.js';
+import { parseYouTubeLink } from '../public/js/video/youtube.js';
 import { ProfileStore, hashPassword, checkPassword } from '../server/profileStore.js';
 import { mkdtempSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -67,6 +68,95 @@ test('fluxo completo: setup, pedido, aceite, sinalização e saída', () => {
 
   server.handle(viewer, 'removeclientfromstream', { streamIdentifier });
   assert.equal(notes(host, 'notifystreamclientleft')[0].args.reason, LeaveReason.LEFT);
+});
+
+test('transmissão de arquivo pode ser anunciada pausada e retomada pelo anfitrião', () => {
+  const { server, login, notes } = setup();
+  const host = login('host');
+  const viewer = login('viewer');
+  const { streamIdentifier } = server.handle(host, 'setupstream', { type: StreamType.FILE, paused: true });
+  const { stream } = notes(viewer, 'notifystreamstarted')[0].args;
+  assert.equal(stream.type, StreamType.FILE);
+  assert.equal(stream.paused, true);
+
+  server.handle(host, 'updatestream', { streamIdentifier, paused: false });
+  assert.equal(notes(viewer, 'notifystreamupdated')[0].args.stream.paused, false);
+});
+
+test('desenhos chegam só aos participantes aceitos e usam o nome do autor', () => {
+  const { server, login, notes, clear } = setup();
+  const host = login('Anfitrião');
+  const author = login('Autora');
+  const viewer = login('Espectador');
+  const outsider = login('Na sala');
+  const { streamIdentifier } = server.handle(host, 'setupstream', {});
+  for (const clid of [author, viewer]) {
+    server.handle(clid, 'joinstreamrequest', { streamIdentifier });
+    server.handle(host, 'respondjoinstreamrequest', { streamIdentifier, clid, accept: true });
+  }
+  server.handle(outsider, 'joinstreamrequest', { streamIdentifier });
+  clear();
+
+  const args = { streamIdentifier, clid: host, name: 'Falso', strokeId: 'traco-1', points: [[0, 10000], [4000, 2000]] };
+  assert.ok(server.view(author).server.capabilityExtensions.includes('STREAM_ANNOTATIONS'));
+  assert.throws(() => server.handle(outsider, 'streamannotation', args), { code: 'permission_denied' });
+  assert.throws(() => server.handle(author, 'streamannotation', { ...args, points: [[10001, 0]] }), { code: 'invalid_args' });
+  server.handle(author, 'streamannotation', args);
+  for (const clid of [host, viewer]) {
+    const [note] = notes(clid, 'notifystreamannotation');
+    assert.deepEqual(note.args, { ...args, clid: author, name: 'Autora' });
+  }
+  assert.equal(notes(author, 'notifystreamannotation').length, 0);
+  assert.equal(notes(outsider, 'notifystreamannotation').length, 0);
+});
+
+test('desenhos ficam desabilitados no servidor com sinalização limitada', () => {
+  const { server, login } = setup({ streamAnnotations: false });
+  const host = login('host');
+  assert.ok(!server.view(host).server.capabilityExtensions.includes('STREAM_ANNOTATIONS'));
+  assert.throws(() => server.handle(host, 'streamannotation', {}), { code: 'unknown_command' });
+});
+
+test('links do YouTube aceitam formatos oficiais e rejeitam hosts parecidos', () => {
+  const id = 'M7lc1UVf-VE';
+  assert.deepEqual(parseYouTubeLink('https://www.youtube.com/watch?v=' + id + '&t=1m30s'), { videoId: id, position: 90 });
+  assert.deepEqual(parseYouTubeLink('https://youtu.be/' + id + '?t=42'), { videoId: id, position: 42 });
+  assert.deepEqual(parseYouTubeLink('https://www.youtube.com/shorts/' + id), { videoId: id, position: 0 });
+  assert.equal(parseYouTubeLink('https://www.youtube.com.evil.test/watch?v=' + id), null);
+  assert.equal(parseYouTubeLink('https://www.youtube.com/playlist?list=abc'), null);
+  assert.equal(parseYouTubeLink('https://www.youtube.com/watch?v=inválido'), null);
+});
+
+test('YouTube sincroniza só espectadores aceitos e só o anfitrião altera o estado', () => {
+  const { server, login, notes } = setup();
+  const host = login('Anfitrião');
+  const viewer = login('Espectador');
+  const late = login('Entrou depois');
+  const id = 'M7lc1UVf-VE';
+  const { streamIdentifier } = server.handle(host, 'setupstream', { type: StreamType.YOUTUBE, videoId: id, position: 30 });
+  const join = clid => {
+    server.handle(clid, 'joinstreamrequest', { streamIdentifier, youtube: true });
+    server.handle(host, 'respondjoinstreamrequest', { streamIdentifier, clid, accept: true });
+    return notes(clid, 'notifyrespondjoinstreamrequest').at(-1).args.youtube;
+  };
+
+  assert.equal(server.view(late).streams[0].youtube, undefined);
+  assert.throws(() => server.handle(late, 'joinstreamrequest', { streamIdentifier }), { code: 'mode_not_supported' });
+  assert.deepEqual(join(viewer), { videoId: id, position: 30, rate: 1, playing: false });
+  const play = { streamIdentifier, position: 51, rate: 1, playing: true };
+  assert.throws(() => server.handle(viewer, 'streamyoutube', play), { code: 'permission_denied' });
+  assert.throws(() => server.handle(late, 'getstreamyoutube', { streamIdentifier }), { code: 'permission_denied' });
+  server.handle(host, 'streamyoutube', play);
+  assert.ok(notes(viewer, 'notifystreamyoutube').at(-1).args.youtube.position >= 51);
+  assert.equal(notes(late, 'notifystreamyoutube').length, 0);
+  const lateState = join(late);
+  assert.equal(lateState.videoId, id);
+  assert.equal(lateState.playing, true);
+  assert.ok(lateState.position >= 51);
+
+  server.handle(host, 'streamyoutube', { ...play, position: 85, playing: false });
+  assert.deepEqual(server.handle(viewer, 'getstreamyoutube', { streamIdentifier }).youtube,
+    { videoId: id, position: 85, rate: 1, playing: false });
 });
 
 test('ban impede novo pedido e pode ser desfeito', () => {
@@ -164,14 +254,15 @@ test('miniatura só é publicada em stream público', () => {
   assert.equal(notes(viewer, 'notifystreamthumbnail')[0].args.thumbnail, thumb);
 });
 
-test('modo SFU é recusado (servidor só anuncia STREAM_P2P)', () => {
+test('modo SFU é recusado pelo servidor P2P', () => {
   const { server, login } = setup();
   const host = login('host');
   assert.throws(() => server.handle(host, 'setupstream', { mode: 2 }), { code: 'mode_not_supported' });
   // O relay de mídia só existe no servidor nativo: aqui STREAM_SFU nunca é anunciado.
   const other = server.connect();
   const view = server.handle(other, 'login', { nickname: 'x', uid: 'uid-x' });
-  assert.deepEqual(view.server.capabilityExtensions, ['STREAM_P2P']);
+  assert.ok(view.server.capabilityExtensions.includes('STREAM_P2P'));
+  assert.ok(!view.server.capabilityExtensions.includes('STREAM_SFU'));
 });
 
 test('aceite informa peerClid (P2P: o próprio dono)', () => {

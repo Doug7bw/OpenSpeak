@@ -45,7 +45,7 @@ function errorText(err) {
   const code = err?.returnCode ?? err?.message;
   const key = `error.${code}`;
   const translated = t(key);
-  return translated !== key ? translated : (err?.message || String(err));
+  return translated !== key ? translated : t(err?.message || String(err));
 }
 
 function showError(err) {

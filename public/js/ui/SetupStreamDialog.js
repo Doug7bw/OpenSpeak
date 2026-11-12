@@ -8,8 +8,11 @@ import {
   StreamAccess, StreamMode, StreamType, QUALITY_PRESETS, RESOLUTIONS, FPS_OPTIONS, AUDIO_BITRATES, findPreset,
 } from '../core/protocol.js';
 import { SharedVideoSource } from '../video/SharedVideoSource.js';
+import { canOpenTorrent } from '../video/TorrentMedia.js';
+import { parseYouTubeLink } from '../video/youtube.js';
 
 const DEBUG = new URLSearchParams(location.search).has('debug');
+const TORRENT_ENABLED = false;
 
 function segmented(options, value, onChange) {
   return h('div.segmented', options.map(o => h('button', {
@@ -26,6 +29,8 @@ function field(label, info, control) {
 }
 
 function captureErrorKey(err) {
+  if (err?.name === 'TimeoutError') return 'video.error.torrent_timeout';
+  if (/^video\.error\.(file|torrent)_/.test(err?.message ?? '')) return err.message;
   if (err?.name === 'NotAllowedError') return 'video.error.permission';
   if (err?.message === 'streaming_not_supported_on_os') return 'video.error.streaming_not_supported_on_os';
   return 'video.error.no_available_source';
@@ -56,7 +61,14 @@ export class SetupStreamDialog {
     this.quality = base.quality;
     if (!this.config.name) this.config.name = `Stream de ${own ? handler.clientName(own.clid) : ''}`.trim();
     this.config.mode = handler.hasStreamingSFU ? StreamMode.SFU : StreamMode.P2P; // não é escolhido na interface
-    this.sourceTab = this.config.type === StreamType.CAMERA ? 'camera' : this.config.type === StreamType.WINDOW ? 'window' : 'screen';
+    const tabsByType = { [StreamType.CAMERA]: 'camera', [StreamType.WINDOW]: 'window', [StreamType.FILE]: 'file' };
+    this.sourceTab = this.config.type === StreamType.YOUTUBE && this.handler.hasStreamYouTube && !this.sourceOnly
+      ? 'youtube' : (tabsByType[this.config.type] ?? 'screen');
+    this.youtubeLink = '';
+    this.closed = false;
+    this.mediaLoad = null;
+    this.torrentMagnet = '';
+    this.torrentStatus = '';
     this.preview = null; // SharedVideoSource ainda não publicada
     this.cameras = [];
     this.busy = false;
@@ -74,6 +86,8 @@ export class SetupStreamDialog {
   }
 
   close() {
+    this.closed = true;
+    this.mediaLoad?.abort();
     this.preview?.stop();
     this.preview = null;
     document.removeEventListener('keydown', this._keyHandler);
@@ -108,7 +122,7 @@ export class SetupStreamDialog {
       return h('button.btn.primary', { disabled: this.busy, on: { click: () => this.#applyEdit() } },
         icon('check'), t('video.setup.adjust_settings'));
     }
-    return h('button.btn.attention', { disabled: !this.preview || this.busy, on: { click: () => this.#goLive() } },
+    return h('button.btn.attention', { disabled: (this.sourceTab !== 'youtube' && !this.preview) || this.busy, on: { click: () => this.#goLive() } },
       this.busy ? h('span.spinner') : icon('stream'), t('video.action.go_live'));
   }
 
@@ -126,16 +140,65 @@ export class SetupStreamDialog {
       { key: 'screen', title: t('video.sources.screens'), icon: 'screen', disabled: !this.manager.canCaptureScreen },
       { key: 'window', title: t('video.sources.apps'), icon: 'window', disabled: !this.manager.canCaptureScreen },
       { key: 'camera', title: t('video.sources.cameras'), icon: 'camera' },
+      { key: 'file', title: t('video.sources.files'), icon: 'stream', disabled: !SharedVideoSource.canCaptureFile,
+        tooltip: SharedVideoSource.canCaptureFile ? '' : t('video.error.file_capture_unsupported') },
     ];
+    const torrentSupported = TORRENT_ENABLED && SharedVideoSource.canCaptureFile && canOpenTorrent();
+    if (TORRENT_ENABLED) tabs.push({ key: 'torrent', title: t('video.sources.torrent'), icon: 'globe', disabled: !torrentSupported,
+      tooltip: torrentSupported ? '' : t('video.error.torrent_unsupported') });
+    if (!this.sourceOnly && this.handler.hasStreamYouTube) tabs.push({ key: 'youtube', title: 'YouTube', icon: 'stream' });
+    const isYouTube = this.sourceTab === 'youtube';
     if (DEBUG) tabs.push({ key: 'test', title: 'Teste', icon: 'chart' });
     let body;
     if (this.sourceTab === 'camera') {
       body = this.cameras.length
         ? h('div.source-list', this.cameras.map(cam => h('button.source-item', {
           class: { active: this.preview?.videoTrack?.getSettings().deviceId === cam.deviceId },
-          on: { click: () => this.#pick(StreamType.CAMERA, cam.deviceId) },
+          on: { click: () => this.#pick(StreamType.CAMERA, { deviceId: cam.deviceId }) },
         }, icon('camera'), h('span.ellipsis', cam.label || 'Câmera'))))
         : h('div.source-empty', t('video.sources.no_camera'));
+    } else if (this.sourceTab === 'file') {
+      const input = h('input', {
+        type: 'file', accept: 'video/*,.mp4,.webm,.m4v,.mov,.mkv', hidden: true,
+        on: { change: () => {
+          const [file] = input.files;
+          if (file) this.#pick(StreamType.FILE, { file });
+        } },
+      });
+      body = h('div.source-pick',
+        input,
+        h('button.btn.primary', {
+          disabled: this.busy || !SharedVideoSource.canCaptureFile,
+          on: { click: () => input.click() },
+        }, icon('stream'), t('video.setup.pick_file')),
+        !this.edit ? h('p.muted', t('video.setup.file.info')) : null);
+    } else if (isYouTube) {
+      body = [
+        field(t('video.youtube.link'), null, h('input.input', {
+          type: 'url', placeholder: 'https://www.youtube.com/watch?v=…', autocomplete: 'off',
+          value: this.youtubeLink, disabled: this.busy,
+          on: {
+            input: ev => { this.youtubeLink = ev.target.value; },
+            keydown: ev => { if (ev.key === 'Enter') this.#goLive(); },
+          },
+        })),
+        h('p.muted', t('video.youtube.setup_hint')),
+      ];
+    } else if (this.sourceTab === 'torrent') {
+      body = h('form.torrent-source', { on: { submit: ev => {
+        ev.preventDefault();
+        this.#pick('torrent', { magnet: this.torrentMagnet });
+      } } },
+        field(t('video.torrent.magnet'), null, h('input.input', {
+          type: 'text', placeholder: 'magnet:?xt=urn:btih:…', autocomplete: 'off', spellcheck: 'false',
+          value: this.torrentMagnet, disabled: this.busy, required: true,
+          on: { input: ev => { this.torrentMagnet = ev.target.value; } },
+        })),
+        h('div.source-pick',
+          h('button.btn.primary', { type: 'submit', disabled: this.busy || !torrentSupported },
+            this.torrentStatus ? h('span.spinner') : icon('globe'), t('video.torrent.load')),
+          this.torrentStatus ? h('p.muted', { role: 'status' }, t(this.torrentStatus)) : null),
+        !this.edit && this.preview?.fileVideo && !this.torrentStatus ? h('p.muted', t('video.setup.file.info')) : null);
     } else if (this.sourceTab === 'test') {
       body = h('div.source-pick',
         h('button.btn.primary', { on: { click: () => this.#pick('test') } }, icon('chart'), 'Padrão de teste'));
@@ -147,19 +210,22 @@ export class SetupStreamDialog {
         }, icon(this.sourceTab === 'window' ? 'window' : 'screen'), t('video.setup.pick')),
         h('p.muted', t('video.setup.pick.info')));
     }
-    if (this.preview) this.#setPreviewStream(this.preview.stream);
+    const fileVideo = this.preview?.fileVideo;
+    if (fileVideo) fileVideo.classList.add('setup-preview-video');
+    else if (this.preview) this.#setPreviewStream(this.preview.stream);
     return h('div.setup-stream__preview',
       segmented(tabs, this.sourceTab, key => {
+        if (key !== 'torrent' && this.torrentStatus) this.mediaLoad?.abort();
         this.sourceTab = key;
         if (key === 'camera') this.#loadCameras();
         this.render();
       }),
-      h('div.preview-frame',
-        this.preview ? this.previewVideo : h('div.preview-placeholder', icon('stream', 'big'), t('video.stream.select'))),
-      this.preview ? h('div.preview-caption', icon('check'), h('span.ellipsis', this.preview.label)) : null,
+      isYouTube ? null : h('div.preview-frame',
+        this.preview ? (fileVideo ?? this.previewVideo) : h('div.preview-placeholder', icon('stream', 'big'), t('video.stream.select'))),
+      !isYouTube && this.preview ? h('div.preview-caption', icon('check'), h('span.ellipsis', this.preview.label)) : null,
       body,
-      h('label.toggle',
-        h('input', { type: 'checkbox', checked: this.config.audio, on: { change: ev => {
+      isYouTube ? null : h('label.toggle',
+        h('input', { type: 'checkbox', disabled: this.busy, checked: this.config.audio, on: { change: ev => {
           this.config.audio = ev.target.checked;
           // o áudio é decidido na captura: força escolher a fonte de novo
           if (this.preview) {
@@ -187,26 +253,46 @@ export class SetupStreamDialog {
     } catch {
       this.cameras = [];
     }
-    this.render();
+    if (!this.closed) this.render();
   }
 
-  async #pick(type, deviceId) {
+  async #pick(type, { deviceId, file, magnet } = {}) {
     if (this.busy) return;
     this.busy = true;
+    if (type === 'torrent') this.torrentStatus = 'video.torrent.searching';
     this.render();
     try {
-      const src = type === 'test'
-        ? SharedVideoSource.openTestPattern({ audio: this.config.audio, quality: this.quality })
-        : await SharedVideoSource.open({ type, deviceId, audio: this.config.audio, quality: this.quality });
+      const options = { audio: this.config.audio, quality: this.quality };
+      let src;
+      if (file || type === 'torrent') {
+        this.mediaLoad = new AbortController();
+        const signal = this.mediaLoad.signal;
+        src = file
+          ? await SharedVideoSource.openFile({ ...options, file, signal })
+          : await SharedVideoSource.openTorrent({ ...options, magnet, signal, onStatus: key => {
+            this.torrentStatus = key;
+            if (!this.closed) this.render();
+          } });
+      } else if (type === 'test') {
+        src = SharedVideoSource.openTestPattern(options);
+      } else {
+        src = await SharedVideoSource.open({ ...options, type, deviceId });
+      }
+      if (this.closed) {
+        src.stop();
+        return;
+      }
       this.preview?.stop();
       this.preview = src;
       this.config.type = src.type;
       if (type === StreamType.CAMERA && !this.cameras.some(c => c.label)) this.#loadCameras();
     } catch (err) {
-      if (err?.name !== 'AbortError') this.onError(new Error(t(captureErrorKey(err))));
+      if (!this.closed && err?.name !== 'AbortError') this.onError(new Error(t(captureErrorKey(err))));
     } finally {
+      this.mediaLoad = null;
+      this.torrentStatus = '';
       this.busy = false;
-      this.render();
+      if (!this.closed) this.render();
     }
   }
 
@@ -215,6 +301,7 @@ export class SetupStreamDialog {
   #settingsPanel() {
     const c = this.config;
     const q = this.quality;
+    const isYouTube = this.sourceTab === 'youtube';
     const presetOptions = QUALITY_PRESETS.map(p => ({ key: p.id, title: t(p.label) }));
     const accessOptions = [
       { key: StreamAccess.PUBLIC, title: t('video.privacy.public'), icon: 'globe' },
@@ -233,13 +320,13 @@ export class SetupStreamDialog {
       field(t('video.name'), null, h('input.input', {
         value: c.name, maxLength: 64, on: { input: ev => { c.name = ev.target.value; } },
       })),
-      field(t('video.preset'), t('video.preset.info'), h('div',
+      isYouTube ? null : field(t('video.preset'), t('video.preset.info'), h('div',
         segmented(presetOptions, this.presetId, id => this.#applyPreset(id)),
         this.presetId === 'custom' ? h('div.hint', t('video.preset.custom')) : null)),
       field(t('video.privacy'), null, h('div', segmented(accessOptions, c.access, v => { c.access = Number(v); this.render(); }),
         h('div.hint', t(accessInfo)))),
 
-      h('button.expander', {
+      isYouTube ? this.#viewerLimitField() : h('button.expander', {
         class: { open: this.advanced },
         on: { click: () => {
           this.advanced = !this.advanced;
@@ -247,7 +334,7 @@ export class SetupStreamDialog {
           this.render();
         } },
       }, icon('chevronDown'), t('video.setup.section.advanced')),
-      this.advanced ? h('div.advanced',
+      this.advanced && !isYouTube ? h('div.advanced',
         field(t('video.resolution'), t('video.resolution.info'), h('select.input', {
           on: { change: ev => {
             const r = RESOLUTIONS.find(x => x.id === ev.target.value);
@@ -270,10 +357,7 @@ export class SetupStreamDialog {
             change: () => this.render(),
           },
         })),
-        field(t('video.viewer_limit'), t('video.viewer_limit.info'), h('input.input', {
-          type: 'number', min: '0', max: '1000', value: String(c.viewerLimit),
-          on: { input: ev => { c.viewerLimit = Math.max(0, Math.min(1000, Number(ev.target.value) || 0)); } },
-        })),
+        this.#viewerLimitField(),
         h('label.toggle',
           h('input', { type: 'checkbox', checked: c.announce !== false, on: { change: ev => { c.announce = ev.target.checked; } } }),
           h('span.toggle-ui'),
@@ -284,6 +368,13 @@ export class SetupStreamDialog {
           v => { q.audioBitrate = Number(v); this.render(); })) : null,
       ) : null,
     );
+  }
+
+  #viewerLimitField() {
+    return field(t('video.viewer_limit'), t('video.viewer_limit.info'), h('input.input', {
+      type: 'number', min: '0', max: '1000', value: String(this.config.viewerLimit),
+      on: { input: ev => { this.config.viewerLimit = Math.max(0, Math.min(1000, Number(ev.target.value) || 0)); } },
+    }));
   }
 
   #applyPreset(id) {
@@ -302,17 +393,31 @@ export class SetupStreamDialog {
   }
 
   async #goLive() {
-    if (!this.preview) return;
+    if (this.busy) return;
+    const source = this.preview;
+    const isYouTube = this.sourceTab === 'youtube';
+    const youtube = isYouTube ? parseYouTubeLink(this.youtubeLink) : null;
+    if (isYouTube && !youtube) {
+      this.onError(new Error('video.youtube.invalid_link'));
+      return;
+    }
+    if (!isYouTube && !source) return;
     this.busy = true;
     this.render();
     try {
-      await this.preview.applyQuality(this.quality);
-      const source = this.preview;
-      this.preview = null; // a posse passa para o ScreenshareManager
-      await this.manager.startStream({ config: { ...this.config }, quality: { ...this.quality }, source });
+      if (youtube) {
+        await this.manager.startYouTube({ config: this.config, quality: { ...this.quality }, youtube });
+        this.config.type = StreamType.YOUTUBE;
+      } else {
+        await source.applyQuality(this.quality);
+        if (this.closed) return;
+        this.preview = null; // a posse passa para o ScreenshareManager
+        await this.manager.startStream({ config: { ...this.config }, quality: { ...this.quality }, source });
+      }
       this.#persist();
       this.close();
     } catch (err) {
+      if (this.closed) return;
       this.busy = false;
       this.render();
       this.onError(err);

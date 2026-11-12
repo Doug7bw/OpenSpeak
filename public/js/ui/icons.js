@@ -7,6 +7,8 @@ const P = {
   camera: '<path d="M15 10l5-3v10l-5-3z"/><rect x="2" y="6" width="13" height="12" rx="2"/>',
   stream: '<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M10 9.5v5l4.5-2.5z" fill="currentColor"/>',
   stop: '<rect x="6" y="6" width="12" height="12" rx="1.5"/>',
+  sync: '<path d="M20 10a8 8 0 0 0-13.5-5.5L4 7m0 0V3m0 4h4m-4 7a8 8 0 0 0 13.5 5.5L20 17m0 0v4m0-4h-4"/>',
+  pen: '<path d="m13.5 6.5 4 4M4 20l4.5-1 12-12a1.4 1.4 0 0 0 0-2l-1.5-1.5a1.4 1.4 0 0 0-2 0l-12 12L4 20z"/>',
   pause: '<path d="M9 6v12M15 6v12"/>',
   play: '<path d="M7 5v14l12-7z"/>',
   users: '<circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17" cy="9" r="2.4"/><path d="M16.5 14.2c2.6.2 4.5 2.6 4.5 5.8"/>',

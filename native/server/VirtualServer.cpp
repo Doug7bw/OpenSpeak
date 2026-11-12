@@ -137,6 +137,7 @@ const QHash<QString, VirtualServer::Handler> &VirtualServer::handlers()
         {QStringLiteral("removeclientfromstream"), &VirtualServer::cmdRemoveClientFromStream},
         {QStringLiteral("streamunban"), &VirtualServer::cmdStreamUnban},
         {QStringLiteral("streamsignaling"), &VirtualServer::cmdStreamSignaling},
+        {QStringLiteral("streamannotation"), &VirtualServer::cmdStreamAnnotation},
     };
     return map;
 }
@@ -329,6 +330,7 @@ QJsonObject VirtualServer::view(const Client &client) const
         caps.append(CapStreamP2P);
     caps.append(CapProfiles);
     caps.append(CapProfileMedia);
+    caps.append(CapStreamAnnotations);
     if (m_relay) {
         caps.append(CapStreamSFU);
         caps.append(CapStreamSimulcast);
@@ -466,6 +468,8 @@ QJsonObject VirtualServer::cmdProfileMedia(Client &, const QJsonObject &args)
 
 QJsonObject VirtualServer::cmdSetupStream(Client &client, const QJsonObject &args)
 {
+    if (args.value("type").toInt() == int(StreamType::YouTube))
+        fail(rc::ModeNotSupported);
     // Com relay de mídia, toda transmissão vai pelo servidor (SFU): o P2P está
     // desativado. Sem relay, P2P é o único modo.
     const int mode = args.contains("mode") ? args.value("mode").toInt() : int(m_relay ? StreamMode::SFU : StreamMode::P2P);
@@ -486,6 +490,7 @@ QJsonObject VirtualServer::cmdSetupStream(Client &client, const QJsonObject &arg
     s.cid = client.cid;
     s.mode = mode;
     s.created = nowMs();
+    s.paused = args.value("paused").toBool();
     s.name = QStringLiteral("Stream de %1").arg(shownName(client));
     applyConfig(s, args);
     const QString id = s.id;
@@ -691,6 +696,48 @@ QJsonObject VirtualServer::cmdStreamSignaling(Client &client, const QJsonObject 
     return {};
 }
 
+QJsonObject VirtualServer::cmdStreamAnnotation(Client &client, const QJsonObject &args)
+{
+    const Stream &s = stream(args.value("streamIdentifier"));
+    if (client.cid != s.cid || (client.clid != s.ownerClid && !s.viewers.contains(client.clid)))
+        fail(rc::PermissionDenied);
+
+    static const QRegularExpression strokePattern(QStringLiteral("\\A[a-zA-Z0-9-]{1,48}\\z"));
+    const QString strokeId = args.value("strokeId").toString();
+    const QJsonArray points = args.value("points").toArray();
+    if (!strokePattern.match(strokeId).hasMatch() || points.isEmpty() || points.size() > MaxAnnotationPoints)
+        fail(rc::InvalidArgs);
+    for (const QJsonValue &value : points) {
+        const QJsonArray point = value.toArray();
+        if (point.size() != 2)
+            fail(rc::InvalidArgs);
+        for (const QJsonValue &coordinate : point) {
+            const int n = coordinate.toInt(-1);
+            if (n < 0 || n > AnnotationScale)
+                fail(rc::InvalidArgs);
+        }
+    }
+
+    const qint64 second = nowMs() / 1000;
+    if (client.annotationSecond != second) {
+        client.annotationSecond = second;
+        client.annotationBatches = 0;
+    }
+    if (client.annotationBatches >= MaxAnnotationBatchesPerSecond)
+        return {};
+    ++client.annotationBatches;
+
+    const QString command = QStringLiteral("notifystreamannotation");
+    const QJsonObject message{{"streamIdentifier", s.id}, {"clid", client.clid}, {"name", shownName(client)},
+                              {"strokeId", strokeId}, {"points", points}};
+    if (s.ownerClid != client.clid)
+        notify(s.ownerClid, command, message);
+    for (int clid : s.viewers)
+        if (clid != client.clid)
+            notify(clid, command, message);
+    return {};
+}
+
 // --------------------------------------------------------------- auxiliares
 
 void VirtualServer::applyConfig(Stream &s, const QJsonObject &args)
@@ -702,7 +749,7 @@ void VirtualServer::applyConfig(Stream &s, const QJsonObject &args)
     }
     if (args.contains("type")) {
         const int t = args.value("type").toInt(-1);
-        if (t >= int(StreamType::None) && t <= int(StreamType::ExistingSession))
+        if (t >= int(StreamType::None) && t <= int(StreamType::File))
             s.type = t;
     }
     if (args.contains("access")) {

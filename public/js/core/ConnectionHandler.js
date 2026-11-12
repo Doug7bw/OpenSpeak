@@ -29,6 +29,14 @@ export class ConnectionHandler extends EventEmitter {
     return this.capabilities.includes(Capability.STREAM_SFU);
   }
 
+  get hasStreamYouTube() {
+    return this.capabilities.includes(Capability.STREAM_YOUTUBE);
+  }
+
+  get hasStreamAnnotations() {
+    return this.capabilities.includes(Capability.STREAM_ANNOTATIONS);
+  }
+
   get hasProfiles() {
     return this.capabilities.includes(Capability.PROFILES);
   }

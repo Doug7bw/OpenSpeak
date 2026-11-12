@@ -6,6 +6,8 @@ import { t } from './i18n.js';
 import { StreamType } from '../core/protocol.js';
 import { InboundStatus } from '../video/ScreenshareManager.js';
 import { installFullscreenIdle } from './fullscreenIdle.js';
+import { StreamAnnotations } from './StreamAnnotations.js';
+import { YouTubePlayer } from './YouTubePlayer.js';
 
 const TYPE_ICON = { [StreamType.CAMERA]: 'camera', [StreamType.SCREEN]: 'screen', [StreamType.WINDOW]: 'window' };
 
@@ -31,7 +33,9 @@ export class MobileApp {
     this.video = h('video.mobile-video', { autoplay: true, playsInline: true });
     this.center = h('div.mobile-player-center');
     this.controls = h('div.mobile-controls');
-    this.player = h('section.mobile-player', { hidden: true }, this.video, this.center, this.controls);
+    this.annotations = new StreamAnnotations(this.video, (id, update) => manager.sendAnnotation(id, update));
+    this.mediaFrame = h('div.mobile-video-frame', this.video, this.annotations.canvas, this.center);
+    this.player = h('section.mobile-player', { hidden: true }, this.mediaFrame, this.controls);
     this.list = h('div.mobile-list');
     this.status = h('span.muted');
     installFullscreenIdle(this.player);
@@ -54,9 +58,12 @@ export class MobileApp {
     hd.on('resumed', () => this.render());
     hd.on('disconnected', () => {
       this.#attach(null);
+      this.annotations.destroy();
+      this.youtubePlayer?.destroy();
       this.onDisconnected();
     });
     this.manager.on('changed', () => this.render());
+    this.manager.on('annotation', update => this.annotations.receive(update));
     document.addEventListener('fullscreenchange', () => this.render());
     window.addEventListener('beforeunload', () => hd.disconnect());
     this.render();
@@ -124,6 +131,13 @@ export class MobileApp {
 
   #renderPlayer(view) {
     this.player.hidden = !view;
+    this.annotations.update(view ? this.manager.annotationContext(view.streamIdentifier) : null);
+    const youtube = view?.status === InboundStatus.PLAYING ? view.youtube : null;
+    this.mediaFrame.hidden = !!youtube;
+    this.player.classList.toggle('youtube', !!youtube);
+    if (youtube) return this.#renderYouTube(view, youtube);
+    this.youtubePlayer?.destroy();
+    this.youtubePlayer = null;
     if (!view) return;
     const info = this.handler.streams.get(view.streamIdentifier);
     const playing = view.status === InboundStatus.PLAYING || view.status === InboundStatus.RECONNECTING;
@@ -135,8 +149,23 @@ export class MobileApp {
         h('strong.ellipsis', info?.name ?? ''),
         h('span.muted.ellipsis', info ? this.handler.clientName(info.ownerClid) : '')),
       playing ? this.#control(this.video.muted ? 'mute' : 'volume', t('video.action.volume'), () => this.#unmute()) : null,
+      this.annotations.enabled ? this.annotations.controls : null,
       playing ? this.#control(fullscreen ? 'fullscreenExit' : 'fullscreen',
         t(fullscreen ? 'video.action.fullscreen.close' : 'video.action.fullscreen.open'), () => this.#toggleFullscreen()) : null,
+      this.#control('leave', t('video.action.leave'), () => this.#leave(), 'danger'));
+  }
+
+  #renderYouTube(view, youtube) {
+    this.#attach(null);
+    if (!this.youtubePlayer) {
+      this.youtubePlayer = new YouTubePlayer();
+      this.controls.before(this.youtubePlayer.el);
+    }
+    this.youtubePlayer.update(youtube);
+    const info = this.handler.streams.get(view.streamIdentifier);
+    replaceChildren(this.controls,
+      h('div.mobile-now', h('strong.ellipsis', info?.name ?? 'YouTube')),
+      this.#control('sync', t('video.youtube.sync'), () => this.youtubePlayer.resync()),
       this.#control('leave', t('video.action.leave'), () => this.#leave(), 'danger'));
   }
 

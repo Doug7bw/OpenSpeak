@@ -28,7 +28,8 @@ export class CloudRoom {
       const before = await this.store.read();
       const state = before ? JSON.parse(before) : { sessions: {}, revision: 0 };
       const events = [];
-      const room = new VirtualServer({ name: 'OpenSpeak • Sala web', iceServers: [], idPrefix: `${secret()}-`,
+      // Traços ao vivo excedem a frequência de comandos da sala com Redis.
+      const room = new VirtualServer({ name: 'OpenSpeak • Sala web', iceServers: [], streamAnnotations: false, idPrefix: `${secret()}-`,
         send: (clid, message) => events.push({ clid, message }) });
       room.restore(state.room);
       for (const [clid, entry] of Object.entries(state.sessions)) {

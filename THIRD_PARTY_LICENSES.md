@@ -31,6 +31,17 @@ O código-fonte do Qt e do FFmpeg nas versões usadas está disponível nos site
 projetos. As bibliotecas LGPL podem ser substituídas trocando as DLLs do Qt ou recompilando
 o OpenSpeak a partir deste repositório.
 
+## Cliente web
+
+| Componente | Licença | Uso |
+|---|---|---|
+| [WebTorrent 3.0.21](https://github.com/webtorrent/webtorrent/releases/tag/v3.0.21) | MIT ([texto](public/vendor/webtorrent/LICENSE.txt), [avisos das dependências](public/vendor/webtorrent/NOTICES.txt)) | Bundle oficial para receber torrents no navegador do anfitrião |
+
+O bundle em `public/vendor/webtorrent/` vem de `dist/webtorrent.min.js` do
+[pacote oficial](https://registry.npmjs.org/webtorrent/-/webtorrent-3.0.21.tgz).
+O OpenSpeak removeu a referência ao mapa de fontes e a limpeza global de `chunks` na
+inicialização. Cada reprodução usa um diretório temporário de peças independente.
+
 ## Servidor web (Node.js)
 
 | Componente | Licença |

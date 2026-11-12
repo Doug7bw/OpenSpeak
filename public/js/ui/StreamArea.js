@@ -23,6 +23,7 @@ export class StreamArea {
     this.settings = settings;
     this.actions = actions;
     this.tiles = new Map();
+    manager.on('annotation', update => this.tiles.get(update.streamIdentifier)?.annotations.receive(update));
     this.focusId = null;
     this.offset = 0;
     this.perPage = 0;
@@ -246,6 +247,9 @@ export class StreamArea {
       leaveStream: id => guard(m.leaveStream(id)),
       dismiss: id => m.dismissInbound(id),
       viewerNames: id => m.viewerNames(id),
+      annotationContext: id => m.annotationContext(id),
+      sendAnnotation: (id, update) => m.sendAnnotation(id, update),
+      publishYouTube: (id, update) => m.publishYouTube(id, update),
       stopStream: id => guard(m.stopStream(id)),
       togglePause: id => guard(m.setPaused(id, !m.ownStreams.get(id)?.paused)),
       changeSource: id => a.changeSource(id),

@@ -10,7 +10,7 @@ namespace openspeak {
 
 enum class StreamAccess : int { None = 0, Public = 1, ContactsOnly = 2, Private = 3 };
 enum class StreamMode : int { None = 0, P2P = 1, SFU = 2 };
-enum class StreamType : int { None = 0, Camera = 1, Screen = 2, Window = 3, ExistingSession = 4 };
+enum class StreamType : int { None = 0, Camera = 1, Screen = 2, Window = 3, ExistingSession = 4, File = 5, YouTube = 6 };
 enum class LeaveReason : int {
     None = 0, Left = 1, Denied = 2, Failed = 3, Kicked = 4, Banned = 5, StreamStopped = 6, ViewerLimit = 7,
 };
@@ -46,6 +46,11 @@ inline const QString CapStreamSFU = QStringLiteral("STREAM_SFU"); // só com rel
 /// O relay aceita duas camadas de vídeo do transmissor (mid "video-low") e a
 /// escolha de qualidade do espectador (`streamsignaling` {type:'layer'}).
 inline const QString CapStreamSimulcast = QStringLiteral("STREAM_SFU_SIMULCAST");
+inline const QString CapStreamAnnotations = QStringLiteral("STREAM_ANNOTATIONS");
+inline const QString CapStreamYouTube = QStringLiteral("STREAM_YOUTUBE");
+inline constexpr int AnnotationScale = 10'000;
+inline constexpr int MaxAnnotationPoints = 32;
+inline constexpr int MaxAnnotationBatchesPerSecond = 24;
 inline const QString CapProfiles = QStringLiteral("PROFILES");    // perfis guardados no servidor
 inline const QString CapProfileMedia = QStringLiteral("PROFILE_MEDIA"); // banner baixado sob demanda
 

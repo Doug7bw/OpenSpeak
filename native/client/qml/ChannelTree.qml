@@ -9,7 +9,7 @@ Rectangle {
     color: Theme.panel
     signal streamClicked(string id)
 
-    function typeIcon(t) { return t === 1 ? "camera" : t === 3 ? "window" : "screen" }
+    function typeIcon(t) { return t === 1 ? "camera" : t === 3 ? "window" : t === 5 ? "stream" : "screen" }
 
     ProfileCard { id: profileCard }
     Component.onCompleted: {

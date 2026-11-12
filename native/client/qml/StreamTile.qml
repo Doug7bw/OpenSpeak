@@ -53,7 +53,7 @@ Rectangle {
     border.color: focused ? Theme.accent : own ? Qt.rgba(0.94, 0.22, 0.29, 0.45) : Theme.border
     clip: true
 
-    function typeIcon(t) { return t === 1 ? "camera" : t === 3 ? "window" : "screen" }
+    function typeIcon(t) { return t === 1 ? "camera" : t === 3 ? "window" : t === 5 ? "stream" : "screen" }
     function accessIcon(a) { return a === 2 ? "contacts" : a === 3 ? "lock" : "globe" }
     function initials(name) {
         return (name || "?").trim().split(/\s+/).slice(0, 2).map(p => p[0]).join("").toUpperCase()
