@@ -23,7 +23,11 @@ import {
 import { startWebhook } from './webhook.js';
 import { LinkGuard, SUPPRESS_RECHECK_MS } from './linkguard.js';
 import { PAGES, openButtonRow, renderPanel, renderUserLinks } from './panel.js';
-import { HELP_TEXT, counterCandidates, counterReasonGateway, isBeginnerQuestion, answerGateway, answerMessages, askGateway, findHeroInText, findItemInText, gatewayMessages, officialContext, parseQuestion } from './ask.js';
+import { HELP_TEXT, counterCandidates, counterReasonGateway, isBeginnerQuestion, answerGateway, answerMessages, askGateway, findHeroInText, findItemInText, gatewayMessages, jsonAnswerGateway, officialContext, parseQuestion } from './ask.js';
+import {
+  DOWNLOAD_URL, GitHubIssues, KIND_LABEL, REPO, duplicateComment, fallbackDraft, issueBody, issueMessages, latestChanges, mentionsOpenSpeak,
+  openspeakMessages, parseIssueDraft, parseOpenSpeakQuestion, renderIssueDone, renderIssueDraft, renderOpenSpeakAnswer, takeIssueQuota,
+} from './openspeak.js';
 import { buildCode } from './buildcode.js';
 import { renderBuildImage } from './buildimage.js';
 import { DeadlockData, RANKS } from './deadlock.js';
@@ -46,6 +50,10 @@ const ASK_COOLDOWN_MS = 4000;
 const COUNTER_WHY_TTL_MS = 30 * 60_000;
 /** Respostas de links lembradas para refletir edição/exclusão da original (as mais recentes). */
 const LINK_REPLIES_MAX = 2000;
+/** Rascunho de issue esperando o "Abrir issue" de quem relatou. */
+const ISSUE_DRAFT_TTL_MS = 15 * 60_000;
+/** Issues (ou relatos somados) por pessoa a cada 24 h. */
+const ISSUES_PER_DAY = 3;
 
 
 const log = (...args) => console.log(new Date().toISOString(), ...args);
@@ -148,7 +156,7 @@ const COMMANDS = [
   new SlashCommandBuilder().setName('links').setDescription('Ativar ou desativar a correção dos seus links do X, TikTok e Instagram')
     .setContexts(...PUBLIC_CONTEXTS),
   ...deadlockCommands(),
-  new SlashCommandBuilder().setName('frisquila').setDescription('Deadlock: pergunte qualquer coisa (igual a @Frisquila)')
+  new SlashCommandBuilder().setName('frisquila').setDescription('Deadlock ou OpenSpeak: pergunte, ou mande bug/sugestão (igual a @Frisquila)')
     .setContexts(...PUBLIC_CONTEXTS)
     .addStringOption(opt => opt.setName('pergunta').setDescription('Ex.: melhor build pra seven, quem countera o billy?')
       .setRequired(true).setMaxLength(300)),
@@ -212,6 +220,11 @@ class LiveBot {
     const gw = baseConfig.iaGateway ?? {};
     this.gateway = (process.env.IA_GATEWAY_URL || gw.url) && (process.env.IA_GATEWAY_TOKEN || gw.token)
       ? { url: process.env.IA_GATEWAY_URL || gw.url, token: process.env.IA_GATEWAY_TOKEN || gw.token } : null;
+    // GitHub (issues do OpenSpeak abertas pelo @Frisquila): token com permissão de Issues no repositório.
+    const gh = baseConfig.github ?? {};
+    const ghToken = process.env.GITHUB_TOKEN || gh.token;
+    this.github = ghToken ? new GitHubIssues({ token: ghToken, repo: process.env.OPENSPEAK_ISSUES_REPO || gh.repo || REPO }) : null;
+    this.issueDrafts = new Map(); // id -> { draft, text, user, at }
     this.lastAsk = new Map(); // usuário -> quando perguntou
     this.noSuppressWarned = new Set(); // canais onde já avisou no log que falta "Gerenciar mensagens"
     this.counterWhy = new Map(); // "heroi|rank" -> {at, reasons} do botão Por quê?
@@ -582,7 +595,8 @@ class LiveBot {
     if (!text) return void await reply({ content: HELP_TEXT });
     if (!this.takeAskTurn(message.author.id)) return;
     message.channel.sendTyping?.().catch(() => {});
-    await reply(await this.answerQuestion(text, message.author.tag));
+    const name = message.member?.displayName ?? message.author.displayName ?? message.author.username;
+    await reply(await this.answerQuestion(text, { id: message.author.id, tag: message.author.tag, name }));
   }
 
   /** Uma pergunta por pessoa a cada ASK_COOLDOWN_MS (vale para o @Frisquila e o /frisquila). */
@@ -603,17 +617,22 @@ class LiveBot {
     if (!this.takeAskTurn(interaction.user.id))
       return void await interaction.reply({ content: 'Calma: uma pergunta a cada poucos segundos.', flags: MessageFlags.Ephemeral });
     await interaction.deferReply(this.deadlockReply(interaction));
-    const payload = await this.answerQuestion(text, interaction.user.tag);
+    const name = interaction.member?.displayName ?? interaction.user.displayName ?? interaction.user.username;
+    const payload = await this.answerQuestion(text, { id: interaction.user.id, tag: interaction.user.tag, name });
     await interaction.editReply({ ...payload, allowedMentions: { parse: [] } });
   }
 
-  /** Resposta (mensagem pronta) para uma pergunta livre de Deadlock. */
-  async answerQuestion(text, who) {
+  /** Resposta (mensagem pronta) para uma pergunta livre de Deadlock ou do OpenSpeak. */
+  async answerQuestion(text, user) {
     if (!text) return { content: HELP_TEXT };
+    const who = user?.tag ?? '?';
     try {
       const [heroes, itemMap] = await Promise.all([this.dl.heroes(), this.dl.items()]);
       const items = [...itemMap.values()];
-      let q = parseQuestion(text, heroes, items);
+      let os = parseOpenSpeakQuestion(text);
+      // "bug: o haze tá quebrado" é do jogo, não do OpenSpeak.
+      if (os === 'issue' && !mentionsOpenSpeak(text) && findHeroInText(text, heroes)) os = null;
+      let q = os ? { kind: os } : parseQuestion(text, heroes, items);
       if (!q && this.gateway) {
         try {
           const ai = await askGateway(this.gateway, gatewayMessages(text, heroes));
@@ -622,6 +641,7 @@ class LiveBot {
           // Sem o herói/item que a tela precisa, vira pergunta aberta (a IA responde com os textos oficiais).
           const open = { kind: 'pergunta', rank: ai.rank };
           if (ai.kind === 'pergunta') q = open;
+          else if (ai.kind === 'openspeak' || ai.kind === 'issue') q = { kind: ai.kind };
           // "herói bom pra iniciante" não é ranking por win rate: a IA responde com a complexidade.
           else if (ai.kind === 'ranking') q = isBeginnerQuestion(text) ? open : { kind: 'ranking', rank: ai.rank };
           else if (ai.kind === 'item') q = item ? { kind: 'item', item, rank: ai.rank } : open;
@@ -631,8 +651,16 @@ class LiveBot {
           log('pergunta livre: ia-gateway:', err.message);
         }
       }
+      // Sem IA para classificar, pergunta que cita o OpenSpeak vai para a base do OpenSpeak.
+      if (!q && mentionsOpenSpeak(text)) q = { kind: 'openspeak' };
       if (!q) return { content: HELP_TEXT };
-      log(`pergunta livre: ${q.kind} ${q.hero?.name ?? q.item?.name ?? ''} (${q.rank}) por ${who}`);
+      log(`pergunta livre: ${q.kind} ${q.hero?.name ?? q.item?.name ?? ''} (${q.rank ?? '-'}) por ${who}`);
+      if (q.kind === 'issue') return await this.prepareIssue(text, user);
+      if (q.kind === 'openspeak') {
+        if (!this.gateway) return { content: `Baixe o OpenSpeak em <${DOWNLOAD_URL}>. Para outras dúvidas eu preciso da IA, que não está configurada agora.` };
+        const answer = await answerGateway(this.gateway, openspeakMessages(text, await latestChanges()));
+        return renderOpenSpeakAnswer({ question: text, answer });
+      }
       if (q.kind === 'pergunta') {
         const answer = await answerGateway(this.gateway, answerMessages(text, officialContext(text, heroes, items)));
         return renderAnswer({ question: text, answer });
@@ -641,6 +669,66 @@ class LiveBot {
     } catch (err) {
       log('pergunta livre:', explain(err));
       return { content: 'Não consegui buscar isso agora. Tenta de novo em alguns instantes.' };
+    }
+  }
+
+  /** Relato do OpenSpeak: a IA escreve o rascunho e quem relatou confirma pelos botões. */
+  async prepareIssue(text, user) {
+    if (!this.github) return { content: 'Ainda não consigo abrir issues (o GitHub não está configurado no bot). Avisa o admin direto 😉' };
+    if (!takeIssueQuota(this.state.users[user.id]?.issues, Date.now(), ISSUES_PER_DAY))
+      return { content: `Você já mandou ${ISSUES_PER_DAY} relatos nas últimas 24 h. Segura um pouco que o dev ainda tá lendo 😅` };
+    const open = await this.github.listOpen().catch(err => (log('issues: lista:', err.message), []));
+    let draft = fallbackDraft(text);
+    if (this.gateway) {
+      try {
+        draft = await jsonAnswerGateway(this.gateway, issueMessages(text, open), t => parseIssueDraft(t, open));
+      } catch (err) {
+        log('issues: rascunho pela IA:', err.message);
+      }
+    }
+    const now = Date.now();
+    for (const [k, d] of this.issueDrafts) if (now - d.at > ISSUE_DRAFT_TTL_MS) this.issueDrafts.delete(k);
+    const id = `${now.toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+    this.issueDrafts.set(id, { draft, text, user, at: now });
+    return renderIssueDraft({ id, draft, text });
+  }
+
+  /** Botões "is:…" da prévia da issue (só quem relatou confirma). */
+  async onIssueComponent(interaction) {
+    const [, action, id] = interaction.customId.split(':');
+    const d = this.issueDrafts.get(id);
+    if (!d || Date.now() - d.at > ISSUE_DRAFT_TTL_MS) {
+      this.issueDrafts.delete(id);
+      return void await interaction.update({ content: 'Esse rascunho expirou. Manda o relato de novo.', embeds: [], components: [] });
+    }
+    if (interaction.user.id !== d.user.id)
+      return void await interaction.reply({ content: 'Só quem fez o relato pode confirmar.', flags: MessageFlags.Ephemeral });
+    if (action === 'cancel') {
+      this.issueDrafts.delete(id);
+      return void await interaction.update({ content: 'Beleza, não mandei nada.', embeds: [], components: [] });
+    }
+    const quota = takeIssueQuota(this.state.users[d.user.id]?.issues, Date.now(), ISSUES_PER_DAY);
+    if (!quota) return void await interaction.update({ content: `Você já mandou ${ISSUES_PER_DAY} relatos nas últimas 24 h.`, embeds: [], components: [] });
+    this.issueDrafts.delete(id); // um clique só: nunca abre duas
+    await interaction.deferUpdate();
+    try {
+      const who = { text: d.text, author: d.user.name };
+      let done;
+      if (action === 'add' && d.draft.duplicate) {
+        await this.github.comment(d.draft.duplicate.number, duplicateComment(who));
+        done = { ...d.draft.duplicate, added: true };
+      } else {
+        const labels = KIND_LABEL[d.draft.kind] ? [KIND_LABEL[d.draft.kind]] : [];
+        done = await this.github.create({ title: d.draft.title, body: issueBody(d.draft, who), labels });
+      }
+      this.state.users[d.user.id] = { ...this.state.users[d.user.id], issues: quota };
+      saveState(this.state);
+      log(`issues: #${done.number} ${done.added ? 'somado' : 'aberta'} por ${d.user.tag}`);
+      await interaction.editReply(renderIssueDone(done));
+    } catch (err) {
+      log('issues:', err.message);
+      this.issueDrafts.set(id, d); // deixa tentar de novo
+      await interaction.followUp({ content: 'O GitHub não aceitou agora. Tenta o botão de novo daqui a pouco.', flags: MessageFlags.Ephemeral }).catch(() => {});
     }
   }
 
@@ -1280,6 +1368,8 @@ function createClient(readMessages) {
     if (interaction.isAutocomplete?.()) return void bot.onAutocomplete(interaction).catch(err => log('autocomplete:', explain(err)));
     if (interaction.isMessageComponent?.() && interaction.customId.startsWith('dl:'))
       return void bot.onDeadlockComponent(interaction).catch(err => log(`deadlock (${interaction.customId}):`, explain(err)));
+    if (interaction.isMessageComponent?.() && interaction.customId.startsWith('is:'))
+      return void bot.onIssueComponent(interaction).catch(err => log(`issues (${interaction.customId}):`, explain(err)));
     if (interaction.isMessageComponent?.() && interaction.customId.startsWith('os:'))
       return void bot.onComponent(interaction).catch(err => log(`painel (${interaction.customId}):`, explain(err)));
     if (!interaction.isChatInputCommand() || !COMMAND_NAMES.has(interaction.commandName)) return;

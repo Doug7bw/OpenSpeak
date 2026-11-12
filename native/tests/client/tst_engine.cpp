@@ -2,6 +2,7 @@
 // layout e filtro de SDP. Mesmos cenários de test/stats.test.js e test/layout.test.js.
 
 #include "AudioCapture.h"
+#include "ClientLog.h"
 #include "ConnectionHandler.h"
 #include "AudioCodec.h"
 #include "Settings.h"
@@ -13,6 +14,8 @@
 #include "SourceThumbnails.h"
 
 #include <QImage>
+#include <algorithm>
+#include <climits>
 #include <QPainter>
 #include <QSignalSpy>
 #include <QFile>
@@ -419,6 +422,25 @@ private slots:
         QCOMPARE(decodedSize, QSize(640, 360));
     }
 
+    // A fila de registros sai em lotes que cabem numa mensagem, mais antigos primeiro,
+    // e avisa quando descartou o excesso.
+    void clientLogBatchesAndDrops()
+    {
+        ClientLog::takePending(ClientLog::MaxQueued, INT_MAX); // limpa
+        for (int i = 0; i < ClientLog::MaxQueued + 3; ++i)
+            ClientLog::enqueueForTest(QStringLiteral("linha %1").arg(i));
+        QStringList first = ClientLog::takePending(10);
+        QCOMPARE(first.size(), 10);
+        QVERIFY(first[0].contains("3 registros antigos descartados"));
+        QCOMPARE(first[1], QStringLiteral("linha 3"));
+        ClientLog::takePending(ClientLog::MaxQueued, INT_MAX);
+        const QString big(100 * 1024, 'x');
+        for (int i = 0; i < 5; ++i)
+            ClientLog::enqueueForTest(big);
+        QCOMPARE(ClientLog::takePending(500).size(), 1); // 200 KB cada em JSON: um por lote
+        ClientLog::takePending(ClientLog::MaxQueued, INT_MAX);
+    }
+
     void opusRoundTrip()
     {
         QList<QByteArray> packets;
@@ -432,6 +454,30 @@ private slots:
         for (const auto &p : packets)
             out += dec.decode(p);
         QCOMPARE(out.size(), 5 * 960 * 2 * 4);
+    }
+
+    // A captura não entrega nada no silêncio; o timestamp RTP tem que seguir o
+    // relógio (como num silêncio DTX) para o player do navegador não descartar o som.
+    void opusTimestampFollowsTheClockAcrossSilence()
+    {
+        QList<quint32> stamps;
+        OpusEncoder enc;
+        QVERIFY(enc.open(128000, [&](const QByteArray &, quint32 ts) { stamps.append(ts); }));
+        const QByteArray pcm(960 * 2 * 4, 0); // 20 ms
+        for (int i = 0; i < 5; ++i)
+            enc.push(pcm, 48000, 2);
+        QTest::qSleep(600);
+        for (int i = 0; i < 5; ++i)
+            enc.push(pcm, 48000, 2);
+        QVERIFY(stamps.size() >= 8);
+        quint32 biggestStep = 0;
+        for (int i = 1; i < stamps.size(); ++i) {
+            const quint32 step = stamps[i] - stamps[i - 1]; // módulo 2^32, como no RTP
+            QVERIFY2(step > 0 && step < 0x80000000u, qPrintable(QString::number(stamps[i - 1]) + " -> " + QString::number(stamps[i])));
+            QCOMPARE(step % 960, 0u);
+            biggestStep = std::max(biggestStep, step);
+        }
+        QVERIFY2(biggestStep >= 48000 / 5, "o timestamp não pulou o silêncio de 600 ms");
     }
 };
 

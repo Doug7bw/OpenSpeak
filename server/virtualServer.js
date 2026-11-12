@@ -7,8 +7,8 @@
 
 import {
   StreamAccess, StreamMode, StreamType, LeaveReason, ReturnCode, CAPABILITIES,
-  CAP_PROFILES, CAP_PROFILE_MEDIA, CAP_STREAM_ANNOTATIONS, CAP_STREAM_YOUTUBE,
-  ANNOTATION_SCALE, MAX_ANNOTATION_POINTS, MAX_ANNOTATION_BATCHES_PER_SECOND,
+  CAP_PROFILES, CAP_PROFILE_MEDIA, CAP_STREAM_ANNOTATIONS, CAP_STREAM_YOUTUBE, CAP_CLIENT_LOGS,
+  ANNOTATION_SCALE, MAX_ANNOTATION_POINTS, MAX_ANNOTATION_BATCHES_PER_SECOND, CLIENT_LOG_MAX_LINES,
   MAX_STREAMS_PER_CLIENT, MAX_THUMBNAIL_BYTES, MAX_SIGNALING_BYTES, MAX_AVATAR_BYTES, MAX_PROFILE_MEDIA_BYTES,
 } from './protocol.js';
 import { profileKey } from './profileStore.js';
@@ -58,8 +58,9 @@ export class VirtualServer {
    * @param {import('./profileStore.js').ProfileStore|null} [options.profiles] perfis (sem ele, servidor sem PROFILES)
    */
   constructor({ send, name = 'OpenSpeak', iceServers = [], idPrefix = '', onLiveChanged = null,
-    channels = DEFAULT_CHANNELS, profiles = null, streamAnnotations = true }) {
+    channels = DEFAULT_CHANNELS, profiles = null, streamAnnotations = true, clientLog = null }) {
     this.send = send;
+    this.clientLog = clientLog; // (nickname, clid, version, lines) => void; habilita CLIENT_LOGS
     this.profiles = profiles;
     this.streamAnnotations = streamAnnotations;
     this.onLiveChanged = onLiveChanged;
@@ -197,6 +198,16 @@ export class VirtualServer {
         clients: [...this.clients.values()].filter(c => c.loggedIn).map(c => this.#publicClient(c)),
         streams: [...this.streams.values()].map(s => this.#publicStream(s)),
       };
+    },
+
+    clientlog(client, args) {
+      if (!this.clientLog) fail(ReturnCode.UNKNOWN_COMMAND, 'este servidor não guarda registros');
+      if (!Array.isArray(args.lines)) fail(ReturnCode.INVALID_ARGS, 'lines deve ser uma lista');
+      if (args.lines.length > CLIENT_LOG_MAX_LINES) fail(ReturnCode.PAYLOAD_TOO_LARGE);
+      const lines = args.lines.filter((l) => typeof l === 'string');
+      const version = typeof args.version === 'string' ? args.version.slice(0, 32) : '';
+      if (lines.length) this.clientLog(client.nickname, client.clid, version, lines);
+      return {};
     },
 
     clientmove(client, args) {
@@ -518,6 +529,7 @@ export class VirtualServer {
     const caps = [...CAPABILITIES, CAP_STREAM_YOUTUBE];
     if (this.streamAnnotations) caps.push(CAP_STREAM_ANNOTATIONS);
     if (this.profiles) caps.push(CAP_PROFILES, CAP_PROFILE_MEDIA);
+    if (this.clientLog) caps.push(CAP_CLIENT_LOGS);
     return caps;
   }
 

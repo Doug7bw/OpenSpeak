@@ -5,6 +5,7 @@
 // --profile separa identidade/configurações (duas instâncias na mesma máquina).
 // --debug   habilita a fonte "Padrão de teste" no diálogo de transmissão.
 
+#include "ClientLog.h"
 #include "ConnectionHandler.h"
 #include "Layout.h"
 #include "PeerDirectory.h"
@@ -15,6 +16,7 @@
 #include "AutoUpdater.h"
 #include "TrayIcon.h"
 #include "NativeWindow.h"
+#include "NvidiaProfile.h"
 #include "SoundEffects.h"
 #include "Version.h"
 
@@ -85,10 +87,17 @@ int main(int argc, char *argv[])
     QCommandLineOption restartOpt(QStringLiteral("restart-after-update"), QStringLiteral("Reabre o app após atualização solicitada."));
     QCommandLineOption afterUpdateOpt(QStringLiteral("after-update"), QStringLiteral("Aberto pelo instalador ao fim da atualização."));
     QCommandLineOption autostartOpt(QStringLiteral("autostart"), QStringLiteral("Aberto pelo Windows ao entrar na conta."));
-    parser.addOptions({profileOpt, debugOpt, serverOpt, nickOpt, autoOpt, shotOpt, autoStreamOpt, autoJoinOpt, openOpt, meshPortOpt, uiSmokeOpt, cloudOpt, quitOpt, updateOpt, digestOpt, waitPidOpt, restartOpt, afterUpdateOpt, autostartOpt});
+    QCommandLineOption gsyncOpt(QStringLiteral("gsync-off"), QStringLiteral("Só desliga o G-Sync no perfil NVIDIA do app e encerra (0 = desligado, 3 = já estava, 2 = sem NVIDIA, 1 = erro)."));
+    parser.addOptions({gsyncOpt, profileOpt, debugOpt, serverOpt, nickOpt, autoOpt, shotOpt, autoStreamOpt, autoJoinOpt, openOpt, meshPortOpt, uiSmokeOpt, cloudOpt, quitOpt, updateOpt, digestOpt, waitPidOpt, restartOpt, afterUpdateOpt, autostartOpt});
     parser.process(app);
     if (parser.isSet(updateOpt))
         return AutoUpdater::runInstallHelper(parser.value(updateOpt), parser.value(digestOpt), parser.value(waitPidOpt).toUInt(), parser.isSet(restartOpt));
+    if (parser.isSet(gsyncOpt)) {
+        const GsyncResult r = disableGsyncForThisApp();
+        // 0 = desligado agora, 3 = já estava, 2 = sem NVIDIA, 1 = falhou.
+        return r.status == GsyncResult::Failed ? 1 : r.status == GsyncResult::NoNvidia ? 2
+             : r.status == GsyncResult::AlreadyOff ? 3 : 0;
+    }
 #ifdef Q_OS_WIN
     // O instalador segura este mutex (SetupMutex) enquanto roda. Aberto no meio da
     // atualização, o app não usaria arquivos pela metade nem dispararia outra instalação.
@@ -121,6 +130,13 @@ int main(int argc, char *argv[])
         }
     }
 
+    // Com G-Sync em janela, o driver NVIDIA faz o monitor seguir os quadros da UI e a tela pisca.
+    if (!parser.isSet(uiSmokeOpt))
+        disableGsyncInBackground();
+    // Registros em arquivo (e para o servidor, abaixo) desde o começo.
+    if (!parser.isSet(uiSmokeOpt)) // os testes de interface não enchem a pasta do usuário
+        ClientLog::install(parser.value(profileOpt));
+    qInfo().noquote() << "OpenSpeak" << openspeak::version() << "iniciado";
     Settings settings(parser.value(profileOpt), parser.isSet(debugOpt));
     settings.refreshLaunchAtStartup();
     // A janela pode ficar escondida na bandeja; quem encerra é o "Sair" (Main.qml).
@@ -147,6 +163,7 @@ int main(int argc, char *argv[])
         const quint16 meshPort = parser.isSet(meshPortOpt) ? quint16(parser.value(meshPortOpt).toUInt()) : MeshConnection::DefaultPort;
         handler.setDirectory(new TailscaleDirectory(meshPort, &handler));
     }
+    ClientLog logUploader(&handler, openspeak::version(), [&settings] { return settings.sendLogs(); });
     ScreenshareManager screenshare(&handler, &settings);
     SoundEffects sounds(&handler, &screenshare, &settings);
     QObject::connect(&app, &QCoreApplication::aboutToQuit, &handler, &ConnectionHandler::disconnectFromServer);
@@ -334,5 +351,8 @@ int main(int argc, char *argv[])
         });
         timer->start(4000);
     }
-    return app.exec();
+    const int code = app.exec();
+    qInfo() << "OpenSpeak encerrando";
+    ClientLog::uninstall(); // antes dos estáticos irem embora
+    return code;
 }

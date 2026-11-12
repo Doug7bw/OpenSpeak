@@ -25,7 +25,7 @@ $qml = { param($names) '^native/client/qml/(' + ($names -join '|') + ')\.(qml|js
 
 # Entradas de cada teste, além do próprio arquivo tst_<nome>.cpp.
 $script:TestInputs = @{
-    tst_virtualserver   = @($protocol, '^native/server/(VirtualServer|ProfileStore|StreamRelay)\.')
+    tst_virtualserver   = @($protocol, '^native/server/(VirtualServer|ProfileStore|StreamRelay|LogStore)\.')
     tst_serverhost      = @($protocol, $commonRtc, $server)
     tst_rtprecovery     = @($commonRtc)
     tst_sfuforwarder    = @($commonRtc, '^native/server/Sfu')
@@ -60,7 +60,7 @@ $script:UiShell = @((& $qml @('Main', 'MainView')), '^native/client/main\.cpp$')
 # Peças visuais usadas em toda parte: uma amostra dos painéis basta para ver que o app abre.
 $script:UiSampled = @('startup', 'login', 'setup', 'preferences')
 $script:UiSampledInputs = @((& $qml @('Theme', 'Icon', 'I18n', 'Toasts', 'ResizeHandles')),
-    '^native/client/(AppIcon|TrayIcon|NativeWindow|SoundEffects)\.', '^native/client/assets/', $engine)
+    '^native/client/(AppIcon|TrayIcon|NativeWindow|NvidiaProfile|SoundEffects)\.', '^native/client/assets/', $engine)
 
 foreach ($panel in @($script:PanelInputs.Keys)) {
     $inputs = @($script:PanelInputs[$panel]) + $script:UiShell

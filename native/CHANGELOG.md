@@ -1,3 +1,34 @@
+# OpenSpeak 1.0.42 — registros para resolver bugs
+
+- O app agora guarda **registros** (o que ele faz e os erros que encontra) num
+  arquivo por dia no seu computador, por 7 dias.
+- Esses registros também vão para o **servidor**, para ficar mais fácil
+  descobrir o que aconteceu quando algo dá errado (por exemplo, uma transmissão
+  sem som). Senhas não vão nos registros.
+- Em **Configurações > Diagnóstico** dá para desligar o envio ao servidor e
+  abrir a pasta dos registros.
+
+# OpenSpeak 1.0.41 — áudio que não some mais
+
+- **Áudio da transmissão corrigido:** às vezes a transmissão ia sem som, ou o som
+  parava no meio. Quando o dispositivo de áudio mudava (fone Bluetooth, troca da
+  saída padrão, driver reiniciando), a captura morria e não voltava mais. Agora
+  ela se recria sozinha em poucos segundos.
+- Quem assistia pelo **navegador** podia ficar sem som depois de um momento de
+  silêncio na transmissão (tela de carregamento, pausa de música). Corrigido.
+- Na transmissão de **janela**, o app passa a seguir o processo da janela durante
+  toda a transmissão (por exemplo, app da Microsoft Store que estava minimizado
+  ao começar).
+- Para quem **assiste** no app: se você troca o fone ou a caixa de som, o áudio
+  passa para o novo dispositivo em vez de ficar mudo.
+
+# OpenSpeak 1.0.40 — sem G-Sync no OpenSpeak
+
+- Com o **G-Sync** ligado também em janela, as placas NVIDIA faziam o monitor
+  seguir o OpenSpeak como se ele fosse um jogo, e a tela podia piscar ou o jogo
+  aberto ao lado engasgar. Agora o app desliga o G-Sync só para ele mesmo; os
+  jogos continuam com o G-Sync normalmente.
+
 # OpenSpeak 1.0.39 — áudio da janela e captura alternativa
 
 - **Som da janela corrigido:** às vezes a transmissão de uma janela ia sem

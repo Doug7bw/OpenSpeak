@@ -16,6 +16,7 @@
 #include <QPair>
 
 #include <atomic>
+#include <functional>
 #include <memory>
 #include <thread>
 
@@ -29,8 +30,9 @@ public:
     explicit AudioCapture(QObject *parent = nullptr);
     ~AudioCapture() override;
 
-    /// `pid` só é usado em Mode::Process.
-    bool start(Mode mode, quint32 pid = 0);
+    /// `pid` só é usado em Mode::Process; `resolvePid` (opcional) é chamado a cada
+    /// segundo para seguir o processo da janela (0 = mantém o atual).
+    bool start(Mode mode, quint32 pid = 0, std::function<quint32()> resolvePid = {});
     void stop();
     bool isRunning() const { return m_running; }
 
@@ -63,7 +65,7 @@ signals:
     void excludedChanged(const QString &excluded);
 
 private:
-    void loopbackThread(Mode mode, quint32 pid);
+    void loopbackThread(Mode mode, quint32 pid, std::function<quint32()> resolvePid);
 
     std::atomic<bool> m_running{false};
     std::thread m_thread;

@@ -40,6 +40,9 @@ export const CAP_PROFILES = 'PROFILES';
 export const CAP_PROFILE_MEDIA = 'PROFILE_MEDIA';
 export const CAP_STREAM_ANNOTATIONS = 'STREAM_ANNOTATIONS';
 export const CAP_STREAM_YOUTUBE = 'STREAM_YOUTUBE';
+// O servidor guarda os registros que o cliente manda com `clientlog` {version, lines}.
+export const CAP_CLIENT_LOGS = 'CLIENT_LOGS';
+export const CLIENT_LOG_MAX_LINES = 500;
 
 export const ANNOTATION_SCALE = 10_000;
 export const MAX_ANNOTATION_POINTS = 32;

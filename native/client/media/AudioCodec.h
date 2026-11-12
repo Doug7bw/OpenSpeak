@@ -4,6 +4,7 @@
 
 #include <QByteArray>
 #include <functional>
+#include <chrono>
 #include <mutex>
 
 struct AVCodecContext;
@@ -38,6 +39,8 @@ private:
     int m_swrRate = 0, m_swrChannels = 0;
     QByteArray m_buffer; // float32 estéreo 48 kHz
     quint32 m_samples = 0;
+    std::chrono::steady_clock::time_point m_start{}; // relógio de parede do 1º quadro
+    bool m_started = false;
 };
 
 class OpusDecoder {

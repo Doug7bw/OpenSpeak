@@ -1,7 +1,8 @@
 # Frisquila: bot do Discord do servidor
 
 O Frisquila avisa quem está ao vivo no OpenSpeak, corrige links do X/Twitter e
-responde sobre Deadlock (builds com código para colar no jogo, counters e stats).
+responde sobre Deadlock (builds com código para colar no jogo, counters e stats) e
+sobre o próprio OpenSpeak, levando bugs e sugestões para issues no GitHub.
 
 
 Avisa no Discord quando alguém está transmitindo no OpenSpeak — **quem** está
@@ -23,7 +24,7 @@ Tudo se configura pelo próprio Discord, num **painel com botões e menus**:
 | `/aovivo` | qualquer pessoa (também na DM) | Quem está transmitindo agora: app, canal, espectadores e há quanto tempo |
 | `/servidor` | qualquer pessoa (também na DM) | Usuários online, transmissões, quantos assistem e o tráfego do servidor |
 | `/build`, `/counter`, `/heroi` | qualquer pessoa (também na DM) | Deadlock: veja [Deadlock](#deadlock) |
-| `/frisquila pergunta:` | qualquer pessoa (também na DM) | Pergunta livre de Deadlock, igual a `@Frisquila`; com **Painel > Deadlock > Só para quem pediu** ligado, só quem perguntou vê a resposta |
+| `/frisquila pergunta:` | qualquer pessoa (também na DM) | Pergunta livre de Deadlock ou do OpenSpeak (ou bug/sugestão, que vira issue), igual a `@Frisquila`; com **Painel > Deadlock > Só para quem pediu** ligado, só quem perguntou vê a resposta |
 
 O painel do `/painel` abre numa **visão geral** (um resumo de cada recurso,
 com um botão verde/cinza para ligar e desligar) e tem um menu de seções:
@@ -177,6 +178,58 @@ zstd sem compressão, que o jogo também lê (só fica maior); recomendado Node 
 
 Cache de 1 hora para estatísticas e builds (6 horas para heróis e itens) e no
 máximo 4 consultas ao mesmo tempo, como a API pede.
+
+**Curiosidade que o jogo não responde** (`@Frisquila o Viscous é casado?`): a IA
+responde com uma piada curta, deixando claro que o jogo não diz e que é só
+zoeira, sem afirmar nada como fato. Pergunta séria (mecânica, item, mapa,
+história) sem resposta nos textos oficiais continua com "não tenho essa
+informação" e a sugestão da deadlock.wiki.
+
+## OpenSpeak: dúvidas e issues
+
+O `@Frisquila` (e o `/frisquila pergunta:`) também responde sobre o **OpenSpeak**
+e leva bugs e sugestões para o GitHub (`src/openspeak.js`).
+
+**Dúvidas** (`@Frisquila como baixo o openspeak?`, `@Frisquila a janela fica preta, o que faço?`):
+a IA (tarefa `frisquila_resposta`) responde só com a base escrita à mão em
+`OPENSPEAK_FACTS` (download, edições, atualização, SFU, qualidade, captura
+alternativa, áudio, perfis, atividade do Discord…) mais o `native/CHANGELOG.md`
+buscado do GitHub (as 4 versões mais novas por inteiro e o índice de todas; cache
+de 1 h, sem o CHANGELOG se o GitHub falhar). O que não está ali ela diz que não
+sabe e sugere mandar como sugestão. Nunca informa senha de servidor. A resposta
+traz um botão para baixar o instalador. **Ao mudar um recurso do app, atualize
+`OPENSPEAK_FACTS`** (o CHANGELOG entra sozinho).
+
+**Bugs e sugestões** (`@Frisquila bug: o áudio some quando troco de janela`,
+`@Frisquila sugestão: o openspeak podia ter tema claro`, ou só uma reclamação que a IA
+classifique como relato): a IA escreve título e corpo da issue (tipo bug, sugestão
+ou outro) olhando as issues abertas do Frisquila. O bot mostra a prévia com botões,
+que só quem relatou pode usar:
+
+| Botão | O que faz |
+|---|---|
+| **Abrir issue** | Cria a issue com o label `frisquila` (criado na primeira vez) e `bug` ou `enhancement` |
+| **Somar à #N** | Aparece quando a IA acha uma issue aberta do mesmo assunto: comenta nela com o novo relato |
+| **Abrir nova** | Mesmo havendo parecida, abre outra |
+| **Cancelar** | Não manda nada |
+
+O corpo leva o texto da IA e o **relato original** com o **nome de exibição** de quem
+relatou no Discord (sem IDs). O repositório é público: o rodapé da prévia avisa. O
+rascunho vale 15 min e cada pessoa manda até 3 relatos (issues ou somas) a cada 24 h
+(`state.json` → `users.<id>.issues`). Sem IA, o rascunho é o próprio relato.
+"bug: …" que cita um herói e não o OpenSpeak continua sendo pergunta de Deadlock.
+
+Para ver o que estão pedindo: [issues com o label `frisquila`](https://github.com/JonasHenriqueDev/OpenSpeak/issues?q=is%3Aissue+label%3Afrisquila).
+
+Configuração: um token do GitHub **fine-grained** só para o repositório
+`JonasHenriqueDev/OpenSpeak` com a permissão **Issues: Read and write**, em
+`GITHUB_TOKEN` ou no `config.json`:
+
+```jsonc
+"github": { "token": "github_pat_…", "repo": "JonasHenriqueDev/OpenSpeak" } // repo opcional (ou OPENSPEAK_ISSUES_REPO)
+```
+
+Sem token, o bot responde que ainda não consegue abrir issues.
 
 ## Como funciona
 

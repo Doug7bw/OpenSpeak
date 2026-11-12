@@ -62,6 +62,7 @@ void OpusEncoder::close()
     if (m_swr)
         swr_free(&m_swr);
     m_buffer.clear();
+    m_started = false;
 }
 
 void OpusEncoder::setBitrate(int bitrate)
@@ -105,6 +106,21 @@ void OpusEncoder::push(const QByteArray &pcm, int sampleRate, int channels)
 void OpusEncoder::encodeBuffered()
 {
     const int frameBytes = FrameSamples * Channels * int(sizeof(float));
+    // A captura do Windows não entrega nada no silêncio: sem isto o timestamp RTP
+    // parava enquanto o relógio andava, e o player do navegador via cada volta do som
+    // como pacotes "atrasados" (atraso crescendo, áudio cortado). Pula o timestamp
+    // para frente, como num silêncio DTX; nunca para trás.
+    const auto now = std::chrono::steady_clock::now();
+    if (!m_started) {
+        m_started = true;
+        m_start = now;
+    } else {
+        const qint64 wall = std::chrono::duration_cast<std::chrono::milliseconds>(now - m_start).count() * Rate / 1000;
+        const qint64 pending = m_buffer.size() / (Channels * qsizetype(sizeof(float)));
+        const qint64 behind = wall - (qint64(m_samples) + pending);
+        if (behind > Rate / 5) // > 200 ms
+            m_samples += quint32(behind / FrameSamples * FrameSamples);
+    }
     while (m_buffer.size() >= frameBytes) {
         av_frame_make_writable(m_frame);
         memcpy(m_frame->data[0], m_buffer.constData(), frameBytes);
